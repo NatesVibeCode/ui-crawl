@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ui-crawl fixture</title>
+    <style>
+      body { font-family: system-ui, sans-serif; padding: 24px; }
+      button, a { display: inline-block; margin: 6px; padding: 8px 12px; }
+    </style>
+  </head>
+  <body>
+    <h1>UI Crawl Fixture</h1>
+
+    <!-- ACTED: appends a DOM node -->
+    <button id="works">Add item</button>
+    <!-- ACTED: fires a network request -->
+    <button id="net">Load data</button>
+    <!-- ACTED: navigates -->
+    <a id="reallink" href="/page2.html">Real link</a>
+
+    <!-- DEFECT button-threw: handler throws -->
+    <button id="throws">Throws on click</button>
+    <!-- DEFECT dead-button: real href, navigation prevented, nothing else happens -->
+    <a id="deadlink" href="/gone?x=1">Dead link</a>
+
+    <!-- TASTE maybe-contextual: bare button, no handler -->
+    <button id="bare">Save</button>
+    <!-- skipped: disabled -->
+    <button id="disabledBtn" disabled>Disabled</button>
+
+    <!-- TASTE redundant-control: two controls to the same destination -->
+    <a id="acct1" href="/account">Account</a>
+    <a id="acct2" href="/account">My Account</a>
+
+    <ul id="list"></ul>
+
+    <script>
+      document.getElementById('works').addEventListener('click', () => {
+        const li = document.createElement('li');
+        li.textContent = 'item ' + (document.getElementById('list').children.length + 1);
+        document.getElementById('list').appendChild(li);
+      });
+      document.getElementById('net').addEventListener('click', () => {
+        fetch('/data.json').catch(() => {});
+      });
+      document.getElementById('throws').addEventListener('click', () => {
+        throw new Error('intentional boom');
+      });
+      document.getElementById('deadlink').addEventListener('click', (e) => {
+        e.preventDefault(); // looks like a link, does nothing
+      });
+    </script>
+  </body>
+</html>

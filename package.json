@@ -1,0 +1,30 @@
+{
+  "name": "@aidev/ui-crawl",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Standalone Playwright UI-crawl harness: drives a running dev server and sorts findings into mechanical defects vs taste questions. Imports zero application code; only contract is a base URL.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "bin": {
+    "ui-crawl": "./bin/ui-crawl.ts",
+    "ui-motion-capture": "./bin/ui-motion-capture.ts"
+  },
+  "scripts": {
+    "crawl": "tsx bin/ui-crawl.ts",
+    "capture": "tsx bin/ui-motion-capture.ts",
+    "test": "vitest run",
+    "test:live": "UI_CRAWL_LIVE=1 vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "playwright": "^1.48.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}
