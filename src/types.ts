@@ -39,7 +39,9 @@ export type FindingType =
   | 'viewport-overflow' // page or element horizontally overflows the viewport
   | 'pointer-intercepted' // control click intercepted by overlay/occluding element
   | 'small-touch-target' // clickable element smaller than WCAG 24x24px minimum
-  | 'dark-mode-contrast'; // text fails contrast in dark mode
+  | 'dark-mode-contrast' // text fails contrast in dark mode
+  | 'container-overflow' // child element bleeds past bottom of its container
+  | 'sibling-overlap'; // consecutive sibling sections overlap vertically
 
 export interface SourceLocation {
   file?: string;
@@ -156,6 +158,7 @@ export interface Evidence {
     overlapFrac?: number;
     box?: Box;
     otherBox?: Box;
+    overflowPx?: number;
   };
   typography?: {
     ratio?: number;

@@ -6,7 +6,14 @@ export interface LayoutAuditOptions {
 }
 
 export interface LayoutIssue {
-  kind: 'layout-overlap' | 'text-overlap' | 'text-line-collision' | 'clipped-text' | 'viewport-overflow';
+  kind:
+    | 'layout-overlap'
+    | 'text-overlap'
+    | 'text-line-collision'
+    | 'clipped-text'
+    | 'viewport-overflow'
+    | 'container-overflow'
+    | 'sibling-overlap';
   selector: string;
   otherSelector?: string;
   remediation?: string;
@@ -49,7 +56,14 @@ export async function auditPageLayout(
   const issues = await page
     .evaluate(() => {
       const findings: {
-        kind: 'layout-overlap' | 'text-overlap' | 'text-line-collision' | 'clipped-text' | 'viewport-overflow';
+        kind:
+          | 'layout-overlap'
+          | 'text-overlap'
+          | 'text-line-collision'
+          | 'clipped-text'
+          | 'viewport-overflow'
+          | 'container-overflow'
+          | 'sibling-overlap';
         selector: string;
         otherSelector?: string;
         remediation?: string;
@@ -274,6 +288,72 @@ export async function auditPageLayout(
         }
       }
 
+      // 3b. Vertical Sibling Overlap Audit (Major layout blocks colliding)
+      const majorBlocks = Array.from(
+        document.querySelectorAll('main > *, section > *, article > *, body > *, [class*="section"], [class*="intro"], [class*="hero"], [class*="steps"], [class*="grid"]'),
+      ) as HTMLElement[];
+
+      for (let i = 0; i < majorBlocks.length; i++) {
+        const a = majorBlocks[i];
+        if (!isVisible(a)) continue;
+        const next = a.nextElementSibling as HTMLElement | null;
+        if (!next || !isVisible(next)) continue;
+
+        const aStyle = window.getComputedStyle(a);
+        const nextStyle = window.getComputedStyle(next);
+        if (aStyle.position === 'absolute' || aStyle.position === 'fixed') continue;
+        if (nextStyle.position === 'absolute' || nextStyle.position === 'fixed') continue;
+
+        const ra = a.getBoundingClientRect();
+        const rNext = next.getBoundingClientRect();
+
+        const xSpan = Math.min(ra.right, rNext.right) - Math.max(ra.left, rNext.left);
+        if (xSpan > 50 && rNext.top < ra.bottom - 4 && rNext.height > 10 && ra.height > 10) {
+          const overlapPx = Math.round(ra.bottom - rNext.top);
+          findings.push({
+            kind: 'sibling-overlap',
+            selector: selectorFor(a),
+            otherSelector: selectorFor(next),
+            overflowPx: overlapPx,
+            box: { selector: selectorFor(a), x: ra.x, y: ra.y, w: ra.width, h: ra.height },
+            otherBox: { selector: selectorFor(next), x: rNext.x, y: rNext.y, w: rNext.width, h: rNext.height },
+            remediation: `Vertical sibling blocks overlap by ${overlapPx}px. Increase margin/gap or remove negative offsets between <${a.tagName.toLowerCase()}> and <${next.tagName.toLowerCase()}>.`,
+          });
+        }
+      }
+
+      // 3c. Container Escape / Child Overflow Audit
+      const containers = Array.from(
+        document.querySelectorAll('section, article, header, footer, .section, [class*="intro"], [class*="card"], [class*="hero"], [class*="steps"], [class*="split"]'),
+      ) as HTMLElement[];
+
+      for (let i = 0; i < containers.length; i++) {
+        const c = containers[i];
+        if (!isVisible(c)) continue;
+        const rc = c.getBoundingClientRect();
+        if (rc.height <= 0 || rc.width <= 0) continue;
+        const cStyle = window.getComputedStyle(c);
+        if (cStyle.overflowY === 'hidden' || cStyle.overflowY === 'clip' || cStyle.overflowY === 'scroll' || cStyle.overflowY === 'auto') continue;
+
+        for (const ch of Array.from(c.children) as HTMLElement[]) {
+          if (!isVisible(ch)) continue;
+          const chStyle = window.getComputedStyle(ch);
+          if (chStyle.position === 'absolute' || chStyle.position === 'fixed') continue;
+          const rch = ch.getBoundingClientRect();
+          if (rch.bottom > rc.bottom + 4 && rch.height > 12) {
+            const bleedPx = Math.round(rch.bottom - rc.bottom);
+            findings.push({
+              kind: 'container-overflow',
+              selector: selectorFor(ch),
+              otherSelector: selectorFor(c),
+              overflowPx: bleedPx,
+              textSample: textOf(ch).slice(0, 40),
+              remediation: `Child element <${ch.tagName.toLowerCase()}> extends ${bleedPx}px past the bottom of its parent <${c.tagName.toLowerCase()}>. Increase parent padding/min-height or adjust flex alignment to prevent container bleeding.`,
+            });
+          }
+        }
+      }
+
       // 4. Silent Text Clipping Audit
       const clippedCandidates = Array.from(
         document.querySelectorAll('p, span, h1, h2, h3, h4, h5, h6, button, a[href], [class*="label"], [class*="badge"]'),
@@ -328,6 +408,7 @@ export async function auditPageLayout(
         overlapFrac: iss.overlapFrac,
         box: iss.box,
         otherBox: iss.otherBox,
+        overflowPx: iss.overflowPx,
       },
       typography: {
         ratio: iss.ratio,

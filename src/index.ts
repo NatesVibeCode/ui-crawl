@@ -22,6 +22,14 @@ import { auditPageLayout, boxIntersection } from './layout.js';
 import { auditPageHitTest } from './hitTest.js';
 import { resolveSourceForSelector } from './source.js';
 import { openDatabase, saveRun, getDiff } from './db.js';
+import {
+  auditTabPanels,
+  autoFillFormInputs,
+  detectOpenModal,
+  auditOpenModal,
+  dismissOpenModal,
+  type AppStateAuditResult,
+} from './appState.js';
 import { triageRaw } from './triage.js';
 import { PolitenessGate } from './policy.js';
 import { buildFindingsJson, buildAgentPayload } from './report.js';
@@ -75,11 +83,21 @@ export { toRouteTemplate } from './routeTemplate.js';
 export { planVisits, planSeedList } from './discover.js';
 export { buildFindingsJson, buildAgentPayload, type AgentPayload, type AgentAction } from './report.js';
 export { startMcpServer, handleMcpMessage, MCP_TOOLS, type JsonRpcRequest, type JsonRpcResponse } from './mcp.js';
-export { serveStatic, type StaticServer } from './serve.js';
+export { serveStatic, discoverHtmlRoutes, type StaticServer } from './serve.js';
 export { snapshotUrl, type SnapshotOptions } from './snapshot.js';
 export { auditPageHitTest, isTouchTargetSmall, isHitOccluded } from './hitTest.js';
 export { extractElementSource, resolveSourceForSelector } from './source.js';
 export { openDatabase, saveRun, getDiff, getRunHistory, getFindingById, type RunRecord } from './db.js';
+export {
+  auditTabPanels,
+  autoFillFormInputs,
+  detectOpenModal,
+  auditOpenModal,
+  dismissOpenModal,
+  type AppStateAuditResult,
+} from './appState.js';
+export { startUiServer, broadcastEvent, type UiServer, type UiServerOptions } from './server.js';
+
 
 function slug(route: string): string {
   const s = route.replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
@@ -176,11 +194,20 @@ export async function crawl(config: CrawlConfig): Promise<CrawlResult> {
       routes = planSeedList(cfg.routes, cfg.maxPages);
     }
 
+    const totalVisits = cfg.viewports.length * routes.length;
+    let visitIndex = 0;
+
     for (const viewport of cfg.viewports) {
       const viewportEvidence = { width: viewport.width, height: viewport.height, label: viewport.label };
       const viewportSuffix = cfg.viewports.length > 1 ? `--${slug(viewport.label ?? `${viewport.width}x${viewport.height}`)}` : '';
 
       for (const route of routes) {
+      visitIndex++;
+      const vpLabel = viewport.label ?? `${viewport.width}x${viewport.height}`;
+      const progressMsg = `[ui-crawl] [${visitIndex}/${totalVisits}] ${route} (${vpLabel})...`;
+      process.stderr.write(progressMsg + '\n');
+      cfg.onProgress?.({ phase: 'page-start', route, pageIndex: visitIndex, totalPages: totalVisits, message: progressMsg });
+
       // One page per route, closed at the end of it. This is what bounds memory: a page
       // reused for a whole crawl accumulates everything the click sweep does to it, and
       // peak RSS grew to 857MB over 25 routes. With a page per route it stays ~371MB.
@@ -309,6 +336,8 @@ export async function crawl(config: CrawlConfig): Promise<CrawlResult> {
       if (!challenged && !cfg.skipLayout) {
         const layoutFindings = await auditPageLayout(page, route, { viewport: viewportEvidence }).catch(() => []);
         rawFindings.push(...layoutFindings);
+        const tabFindings = await auditTabPanels(page, route).catch(() => []);
+        rawFindings.push(...tabFindings);
       }
 
       if (!challenged && !cfg.skipAffordance) {
@@ -351,6 +380,7 @@ export async function crawl(config: CrawlConfig): Promise<CrawlResult> {
       let probedControls: number | undefined;
       let skippedControls: number | undefined;
       if (!challenged && !cfg.skipInteractionSweep) {
+        await autoFillFormInputs(page).catch(() => 0);
         const sweep = await sweepControls(page, route, url, controls, cfg, () => gate.pace(url));
         rawFindings.push(...sweep.findings);
         probedControls = sweep.probed;
@@ -400,6 +430,12 @@ export async function crawl(config: CrawlConfig): Promise<CrawlResult> {
         textLength,
         palette,
       });
+
+      const pageFindingsCount = rawFindings.length - routeFindingStart;
+      const doneMsg = `[ui-crawl] [${visitIndex}/${totalVisits}] ${route} done (${pageFindingsCount} findings)`;
+      process.stderr.write(doneMsg + '\n');
+      cfg.onProgress?.({ phase: 'page-done', route, pageIndex: visitIndex, totalPages: totalVisits, message: doneMsg });
+
       await page.close().catch(() => {});
       }
     }
@@ -448,6 +484,12 @@ export async function crawl(config: CrawlConfig): Promise<CrawlResult> {
     outDir: cfg.outDir,
     artifacts: reportArtifacts,
   });
+
+  const defects = result.findings.filter((f) => f.bucket === 'defect').length;
+  const taste = result.findings.filter((f) => f.bucket === 'taste').length;
+  const finishMsg = `[ui-crawl] Completed crawl of ${result.pages.length} page(s) (${defects} defects, ${taste} taste)`;
+  process.stderr.write(finishMsg + '\n');
+  cfg.onProgress?.({ phase: 'crawl-done', totalPages: result.pages.length, message: finishMsg });
 
   return result;
 }

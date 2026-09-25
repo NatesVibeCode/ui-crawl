@@ -5,6 +5,7 @@ import { classifyChange, MUTATION_FLOOR } from './changeDetect.js';
 import { findRedundant } from './redundancy.js';
 import { relocateControl } from './snapshot.js';
 import { SELECTOR } from './selectors.js';
+import { detectOpenModal, auditOpenModal, dismissOpenModal } from './appState.js';
 
 export { SELECTOR };
 
@@ -47,8 +48,10 @@ export async function enumerateControls(page: Page): Promise<Control[]> {
       const role = el.getAttribute('role') || undefined;
       const disabled = el.hasAttribute('disabled') || el.getAttribute('aria-disabled') === 'true';
       const rect = el.getBoundingClientRect();
+      const isOffScreen = rect.top < -200 || rect.left < -200 || rect.bottom > 200000;
+      const isSkipLink = (el.classList.contains('skip-link') || (tag === 'a' && (el.getAttribute('href') || '').startsWith('#'))) && isOffScreen;
       const style = window.getComputedStyle(el);
-      const visible = rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
+      const visible = rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none' && !isSkipLink;
 
       const aria = el.getAttribute('aria-label');
       const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
@@ -425,6 +428,17 @@ export async function sweepControls(
       !signals.clickThrew;
     const raw = rawFromVerdict(route, c, signals);
     if (raw) findings.push(raw);
+
+    // App UI Modal Check: If click opened a modal/dialog, audit it and restore state
+    if (signals.domMutated || signals.dialogOpened) {
+      const modal = await detectOpenModal(page);
+      if (modal.isOpen) {
+        const modalFindings = await auditOpenModal(page, route, modal);
+        findings.push(...modalFindings);
+        await dismissOpenModal(page);
+        clean = false; // State was modified; ensure next probe reloads if needed
+      }
+    }
   }
   for (const group of findRedundant(controls)) {
     const first = group.controls[0];

@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { boxIntersection } from '../src/layout.js';
+import { describe, it, expect, vi } from 'vitest';
+import { boxIntersection, auditPageLayout } from '../src/layout.js';
 import type { Box } from '../src/types.js';
 
 describe('layout: boxIntersection', () => {
@@ -12,8 +12,6 @@ describe('layout: boxIntersection', () => {
   it('calculates partial overlap accurately', () => {
     const a: Box = { selector: 'a', x: 0, y: 0, w: 100, h: 100 };
     const b: Box = { selector: 'b', x: 50, y: 50, w: 100, h: 100 };
-    // Intersection rect: x: 50..100 (50w), y: 50..100 (50h) => 2500 area
-    // minArea: 10000 => frac: 0.25
     const res = boxIntersection(a, b);
     expect(res.area).toBe(2500);
     expect(res.frac).toBe(0.25);
@@ -22,9 +20,43 @@ describe('layout: boxIntersection', () => {
   it('calculates full containment accurately', () => {
     const a: Box = { selector: 'a', x: 0, y: 0, w: 100, h: 100 };
     const b: Box = { selector: 'b', x: 10, y: 10, w: 20, h: 20 };
-    // Intersection rect: 400 area, minArea: 400 => frac: 1.0
     const res = boxIntersection(a, b);
     expect(res.area).toBe(400);
     expect(res.frac).toBe(1);
+  });
+});
+
+describe('layout: auditPageLayout mapping', () => {
+  it('maps evaluated container-overflow and sibling-overlap findings', async () => {
+    const mockPage = {
+      evaluate: vi.fn().mockResolvedValue([
+        {
+          kind: 'sibling-overlap',
+          selector: '.section-intro',
+          otherSelector: '.steps',
+          overflowPx: 15,
+          remediation: 'Fix margin',
+        },
+        {
+          kind: 'container-overflow',
+          selector: 'h2',
+          otherSelector: '.section-intro',
+          overflowPx: 12,
+          remediation: 'Fix padding',
+        },
+      ]),
+    } as unknown as import('playwright').Page;
+
+    const findings = await auditPageLayout(mockPage, '/test');
+    expect(findings.length).toBe(2);
+    expect(findings[0].kind).toBe('sibling-overlap');
+    expect(findings[0].evidence.selector).toBe('.section-intro');
+    expect(findings[0].evidence.layout?.otherSelector).toBe('.steps');
+    expect(findings[0].evidence.layout?.overflowPx).toBe(15);
+
+    expect(findings[1].kind).toBe('container-overflow');
+    expect(findings[1].evidence.selector).toBe('h2');
+    expect(findings[1].evidence.layout?.otherSelector).toBe('.section-intro');
+    expect(findings[1].evidence.layout?.overflowPx).toBe(12);
   });
 });

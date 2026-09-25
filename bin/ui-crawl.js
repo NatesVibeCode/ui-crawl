@@ -28,42 +28,65 @@ const {
   buildAgentPayload,
   buildFindingsJson,
   startMcpServer,
+  startUiServer,
   snapshotUrl,
   formatSnapshot,
   serveStatic,
+  discoverHtmlRoutes,
   openDatabase,
   getDiff,
   getRunHistory,
 } = mod;
 
 function parseFlags(args) {
-  const out = {};
+  const opts = {};
+  const positional = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
-    if (!a.startsWith('--')) continue;
+    if (!a.startsWith('--')) {
+      positional.push(a);
+      continue;
+    }
     const body = a.slice(2);
     if (body.includes('=')) {
       const [k, v] = body.split(/=(.*)/s);
-      out[k] = v;
+      opts[k] = v;
       continue;
     }
     const next = args[i + 1];
     if (next && !next.startsWith('--')) {
-      out[body] = next;
+      opts[body] = next;
       i++;
     } else {
-      out[body] = true;
+      opts[body] = true;
     }
   }
-  return out;
+  return { opts, positional };
 }
 
 async function main() {
-  const opts = parseFlags(process.argv.slice(2));
+  const { opts, positional } = parseFlags(process.argv.slice(2));
 
   // MCP Mode
   if (opts.mcp) {
     await startMcpServer();
+    return;
+  }
+
+  // UI Server / Dashboard Mode
+  if (opts.ui) {
+    const port = typeof opts.ui === 'string' || typeof opts.ui === 'number' ? Number(opts.ui) : 49152;
+    const dbPath = opts.db ? String(opts.db) : '.ui-crawl.db';
+    const server = await startUiServer({ port, dbPath });
+    process.stderr.write(`[ui-crawl] UI console running at ${server.url}\n`);
+    await new Promise((resolve) => {
+      process.on('SIGINT', () => {
+        server.close().then(resolve);
+      });
+      process.on('SIGTERM', () => {
+        server.close().then(resolve);
+      });
+    });
     return;
   }
 
@@ -87,9 +110,56 @@ async function main() {
     return;
   }
 
+  // Screenshot Mode
+  if (opts.shot) {
+    const outPath = String(opts.shot);
+    let staticServer;
+    const staticTarget = opts.dir ? String(opts.dir) : opts.file ? String(opts.file) : undefined;
+    let targetUrl = (opts.url || opts['base-url'] || positional[0])
+      ? String(opts.url || opts['base-url'] || positional[0])
+      : undefined;
+
+    if (staticTarget) {
+      staticServer = await serveStatic(staticTarget);
+      targetUrl = staticServer.url;
+    }
+
+    if (!targetUrl) {
+      console.error(JSON.stringify({ error: '--shot requires a target URL, positional URL, --dir, or --file' }));
+      process.exit(2);
+    }
+
+    try {
+      const { chromium, webkit, firefox } = await import('playwright');
+      const browserName = opts.browser === 'webkit' ? 'webkit' : opts.browser === 'firefox' ? 'firefox' : 'chromium';
+      const launcher = browserName === 'webkit' ? webkit : browserName === 'firefox' ? firefox : chromium;
+      const browser = await launcher.launch({ headless: !opts.headed });
+      const width = opts.width ? Number(opts.width) : 1280;
+      const height = opts.height ? Number(opts.height) : 800;
+      const page = await browser.newPage({ viewport: { width, height } });
+      await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+      if (opts.wait) await page.waitForTimeout(Number(opts.wait));
+      else await page.waitForTimeout(500);
+
+      if (opts.selector) {
+        const el = page.locator(String(opts.selector)).first();
+        await el.screenshot({ path: outPath });
+      } else {
+        await page.screenshot({ path: outPath, fullPage: !!opts['full-page'] });
+      }
+      await browser.close();
+      process.stdout.write(JSON.stringify({ shot: outPath, url: targetUrl, width, height, browser: browserName, selector: opts.selector }) + '\n');
+      return;
+    } finally {
+      if (staticServer) await staticServer.close();
+    }
+  }
+
   // Snapshot Mode
   if (opts.snapshot) {
-    const targetUrl = (opts.url || opts['base-url']) ? String(opts.url || opts['base-url']) : undefined;
+    const targetUrl = (opts.url || opts['base-url'] || positional[0])
+      ? String(opts.url || opts['base-url'] || positional[0])
+      : undefined;
     const dir = opts.dir ? String(opts.dir) : undefined;
     const file = opts.file ? String(opts.file) : undefined;
     const cap = opts.cap ? Number(opts.cap) : undefined;
@@ -125,6 +195,9 @@ async function main() {
   let config = {};
   if (opts.config) config = JSON.parse(await readFile(String(opts.config), 'utf8'));
   if (opts['base-url']) config.baseUrl = String(opts['base-url']);
+  if (!config.baseUrl && positional[0] && (positional[0].startsWith('http://') || positional[0].startsWith('https://'))) {
+    config.baseUrl = positional[0];
+  }
   if (opts.out) config.outDir = String(opts.out);
   if (opts.routes) config.routes = String(opts.routes).split(',').map((s) => s.trim()).filter(Boolean);
   if (opts['max-pages']) config.maxPages = Number(opts['max-pages']);
@@ -148,12 +221,43 @@ async function main() {
   if (opts.diff) config.diff = typeof opts.diff === 'string' ? opts.diff : true;
   if (opts['theme-sweep'] || opts['dark-mode']) config.themeSweep = true;
   if (opts.crops) config.captureCrops = true;
+  if (opts.browser) config.browser = String(opts.browser);
+  if (opts.quick) config.quick = true;
+
+  // Differential Re-run Defects
+  if (opts['rerun-defects']) {
+    const dbPath = opts.db ? String(opts.db) : '.ui-crawl.db';
+    if (existsSync(dbPath)) {
+      try {
+        const db = openDatabase(dbPath);
+        const runs = getRunHistory(db, 1);
+        if (runs.length > 0) {
+          const stmt = db.prepare("SELECT DISTINCT route FROM findings WHERE run_id = ? AND bucket = 'defect'");
+          const rows = stmt.all(runs[0].id);
+          const failedRoutes = rows.map((r) => r.route);
+          if (failedRoutes.length > 0) {
+            config.routes = failedRoutes;
+            process.stderr.write(`[ui-crawl] Re-auditing ${failedRoutes.length} failed route(s) from run ${runs[0].id}: ${failedRoutes.join(', ')}\n`);
+          } else {
+            process.stderr.write(`[ui-crawl] Previous run ${runs[0].id} had 0 defects. Auditing all routes.\n`);
+          }
+        }
+      } catch {
+        /* proceed with default routes */
+      }
+    }
+  }
 
   let staticServer;
   const staticTarget = opts.dir ? String(opts.dir) : opts.file ? String(opts.file) : undefined;
   if (staticTarget) {
     staticServer = await serveStatic(staticTarget);
     config.baseUrl = staticServer.url;
+    // Auto-discover routes if dir is provided and routes not explicitly specified
+    if (opts.dir && (!config.routes || (Array.isArray(config.routes) && config.routes.length === 0))) {
+      config.routes = discoverHtmlRoutes(String(opts.dir));
+      process.stderr.write(`[ui-crawl] Auto-discovered ${config.routes.length} HTML route(s) in ${opts.dir}\n`);
+    }
   }
 
   try {
@@ -167,11 +271,15 @@ async function main() {
     }
 
     if (opts.verbose) {
-      console.error(`[ui-crawl] auditing ${config.baseUrl}${staticTarget ? ` (serving ${staticTarget})` : ''}...`);
+      process.stderr.write(`[ui-crawl] auditing ${config.baseUrl}${staticTarget ? ` (serving ${staticTarget})` : ''}...\n`);
     }
 
     const result = await crawl(config);
-    const output = opts.full ? buildFindingsJson(result) : JSON.stringify(buildAgentPayload(result), null, 2);
+    let payload = buildAgentPayload(result);
+    if (opts['defects-only']) {
+      payload.actions = payload.actions.filter((a) => a.bucket === 'defect');
+    }
+    const output = opts.full ? buildFindingsJson(result) : JSON.stringify(payload, null, 2);
 
     process.stdout.write(output + '\n');
 

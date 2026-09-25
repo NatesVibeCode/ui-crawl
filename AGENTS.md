@@ -58,14 +58,42 @@ node bin/ui-crawl.js --mcp
 # Audit a live app
 node bin/ui-crawl.js --base-url http://localhost:3000 --routes /
 
-# Audit a static build output directory (serves locally automatically)
-node bin/ui-crawl.js --dir ./dist --routes /
+# Audit a static build output directory (auto-discovers all HTML routes)
+node bin/ui-crawl.js --dir ./dist
+
+# Fast visual sweep with WebKit and mechanical defects only
+node bin/ui-crawl.js --dir ./dist --quick --browser webkit --defects-only
+
+# Re-audit only the routes that had defects on the last crawl
+node bin/ui-crawl.js --dir ./dist --rerun-defects
 
 # Audit with dark-mode theme sweep and differential tracking against previous run
-node bin/ui-crawl.js --dir ./dist --routes / --theme-sweep --diff
+node bin/ui-crawl.js --dir ./dist --theme-sweep --diff
 ```
 
-#### 2. Query Differential & History
+#### 2. Embedded Web Dashboard & Server Mode
+```bash
+# Start embedded zero-dependency web dashboard on http://127.0.0.1:49152
+node bin/ui-crawl.js --ui
+
+# With custom port
+node bin/ui-crawl.js --ui 8080
+```
+
+#### 3. Screenshots & Snapshots
+```bash
+# Capture full page or element screenshot
+node bin/ui-crawl.js --shot preview.png --dir ./dist
+node bin/ui-crawl.js --shot modal.png --dir ./dist --selector "dialog#lead-modal"
+
+# Compact numbered DOM snapshot for LLMs
+node bin/ui-crawl.js --snapshot --file ./index.html
+
+# Raw JSON snapshot array
+node bin/ui-crawl.js --snapshot --file ./index.html --json
+```
+
+#### 4. Query Differential & History
 ```bash
 # Show differential against the latest baseline run
 node bin/ui-crawl.js --diff
@@ -132,21 +160,14 @@ Exit Codes:
 - `1`: One or more mechanical defects detected (`has_defects`).
 - `2`: Misconfiguration / missing arguments.
 
-#### 3. Capture Page Snapshot
-```bash
-# Compact token-efficient format
-node bin/ui-crawl.js --snapshot --file ./index.html
-
-# Structured JSON format
-node bin/ui-crawl.js --snapshot --file ./index.html --json
-```
-
 ---
 
 ## 3. Findings Taxonomy & Remediation
 
 | Finding Type | Bucket | Root Cause | Remediation Strategy |
 |---|---|---|---|
+| `container-overflow` | `defect` | Child elements escape container bottom boundary (> 4px) | Adjust container `height: auto`, `min-height`, or check child margins. |
+| `sibling-overlap` | `defect` | Vertical in-flow block siblings collide (> 4px) | Increase vertical margin or remove negative positioning. |
 | `layout-overlap` | `defect` | In-flow sibling elements collide in screen coordinates | Check container `flex-wrap: wrap`, grid columns, or margins. |
 | `text-line-collision` | `defect` | Line-height is too cramped for font ascender/descender ink | Increase `line-height` (minimum `1.2` to `1.4`). |
 | `clipped-text` | `defect` | Text truncated without ellipsis or hidden overflow | Adjust `min-width`, remove fixed height, or add `text-overflow: ellipsis`. |

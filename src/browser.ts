@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
+import { chromium, webkit, firefox, type Browser, type BrowserContext, type Page } from 'playwright';
 import type { ResolvedConfig } from './config.js';
 import { crawlUserAgent } from './config.js';
 
@@ -84,7 +84,9 @@ export async function openSession(
   cfg: ResolvedConfig,
   viewport: { width: number; height: number },
 ): Promise<Session> {
-  const browser = await chromium.launch({ headless: cfg.headless });
+  const engine = cfg.browser ?? 'chromium';
+  const launcher = engine === 'webkit' ? webkit : engine === 'firefox' ? firefox : chromium;
+  const browser = await launcher.launch({ headless: cfg.headless });
   const { context, userAgent } = await buildContext(browser, cfg, viewport);
   return { browser, context, userAgent };
 }

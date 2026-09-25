@@ -113,6 +113,18 @@ const RULES: Record<FindingType, BaseRule> = {
         : `Dark mode text contrast failure on element`;
     },
   },
+  'container-overflow': {
+    bucket: 'defect',
+    severity: 'high',
+    title: (r) =>
+      `Child element "${r.evidence.selector ?? 'element'}" overflows container "${r.evidence.layout?.otherSelector ?? 'parent'}"`,
+  },
+  'sibling-overlap': {
+    bucket: 'defect',
+    severity: 'high',
+    title: (r) =>
+      `Vertical sibling blocks overlap: "${r.evidence.selector ?? 'element'}" into "${r.evidence.layout?.otherSelector ?? 'sibling'}"`,
+  },
 };
 
 function pct(z?: number): string {

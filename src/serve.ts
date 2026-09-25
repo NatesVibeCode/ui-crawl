@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { createReadStream, statSync, existsSync } from 'node:fs';
+import { createReadStream, statSync, existsSync, readdirSync } from 'node:fs';
 import * as path from 'node:path';
 
 const MIME_TYPES: Record<string, string> = {
@@ -21,6 +21,30 @@ const MIME_TYPES: Record<string, string> = {
 export interface StaticServer {
   url: string;
   close: () => Promise<void>;
+}
+
+export function discoverHtmlRoutes(dirPath: string): string[] {
+  const abs = path.resolve(process.cwd(), dirPath);
+  if (!existsSync(abs) || !statSync(abs).isDirectory()) return ['/'];
+  try {
+    const entries = readdirSync(abs, { recursive: true });
+    const routes: string[] = [];
+    for (const entry of entries) {
+      if (typeof entry !== 'string') continue;
+      if (!entry.endsWith('.html')) continue;
+      if (entry.includes('node_modules') || entry.includes('.git') || entry.includes('dist/')) continue;
+      const normalized = '/' + entry.split(path.sep).join('/');
+      routes.push(normalized);
+    }
+    routes.sort((a, b) => {
+      if (a === '/index.html' || a === '/') return -1;
+      if (b === '/index.html' || b === '/') return 1;
+      return a.localeCompare(b);
+    });
+    return routes.length > 0 ? routes : ['/'];
+  } catch {
+    return ['/'];
+  }
 }
 
 export async function serveStatic(targetPath: string): Promise<StaticServer> {
@@ -45,6 +69,12 @@ export async function serveStatic(targetPath: string): Promise<StaticServer> {
       let resolved = filePath;
       if (existsSync(resolved) && statSync(resolved).isDirectory()) {
         resolved = path.join(resolved, 'index.html');
+      } else if (!existsSync(resolved)) {
+        if (existsSync(resolved + '.html') && statSync(resolved + '.html').isFile()) {
+          resolved = resolved + '.html';
+        } else if (existsSync(path.join(resolved, 'index.html')) && statSync(path.join(resolved, 'index.html')).isFile()) {
+          resolved = path.join(resolved, 'index.html');
+        }
       }
       if (!existsSync(resolved) || !statSync(resolved).isFile()) {
         res.statusCode = 404;

@@ -90,6 +90,12 @@ export interface CrawlConfig {
   themeSweep?: boolean;
   /** Capture 200x200 micro-crop base64 PNGs for visual/layout defects. Default false. */
   captureCrops?: boolean;
+  /** Browser engine to launch: chromium, webkit (Safari), or firefox. Default chromium. */
+  browser?: 'chromium' | 'webkit' | 'firefox';
+  /** Fast visual sweep mode (skips button clicking sweeps and zoom reflow loops). Default false. */
+  quick?: boolean;
+  /** Progress callback invoked during crawl execution. */
+  onProgress?: (event: { phase: string; route?: string; pageIndex?: number; totalPages?: number; message?: string }) => void;
 }
 
 export interface ResolvedConfig {
@@ -126,6 +132,9 @@ export interface ResolvedConfig {
   diff?: boolean | string;
   themeSweep: boolean;
   captureCrops: boolean;
+  browser: 'chromium' | 'webkit' | 'firefox';
+  quick: boolean;
+  onProgress?: (event: { phase: string; route?: string; pageIndex?: number; totalPages?: number; message?: string }) => void;
 }
 
 const DEFAULT_VIEWPORT: Viewport = { width: 1280, height: 800, label: 'desktop' };
@@ -212,9 +221,9 @@ export function resolveConfig(c: CrawlConfig): ResolvedConfig {
     navRetries: c.navRetries ?? 3,
     respectRobots: c.respectRobots ?? true,
     perHostDelayMs: c.perHostDelayMs ?? 250,
-    skipInteractionSweep: c.skipInteractionSweep ?? false,
-    maxProbesPerPage: c.maxProbesPerPage ?? 40,
-    skipZoom: c.skipZoom ?? false,
+    skipInteractionSweep: c.quick ? true : (c.skipInteractionSweep ?? false),
+    maxProbesPerPage: c.quick ? 0 : (c.maxProbesPerPage ?? 40),
+    skipZoom: c.quick ? true : (c.skipZoom ?? false),
     skipContrast: c.skipContrast ?? false,
     skipAffordance: c.skipAffordance ?? false,
     skipSpacing: c.skipSpacing ?? false,
@@ -228,5 +237,8 @@ export function resolveConfig(c: CrawlConfig): ResolvedConfig {
     diff: c.diff,
     themeSweep: c.themeSweep ?? false,
     captureCrops: c.captureCrops ?? false,
+    browser: c.browser ?? 'chromium',
+    quick: c.quick ?? false,
+    onProgress: c.onProgress,
   };
 }
