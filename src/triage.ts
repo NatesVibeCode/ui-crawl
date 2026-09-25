@@ -49,8 +49,70 @@ const RULES: Record<FindingType, BaseRule> = {
   'zoom-clip': { bucket: 'taste', severity: 'medium', title: (r) => `Content overflows the viewport at ${pct(r.evidence.zoom)} — acceptable, or broken?` },
   'zoom-overlap': { bucket: 'taste', severity: 'medium', title: (r) => `Elements collide at ${pct(r.evidence.zoom)}` },
   'stale-selector': { bucket: 'taste', severity: 'low', title: (r) => `Control could not be re-located: "${name(r)}"` },
+  'missing-accessible-name': { bucket: 'defect', severity: 'high', title: (r) => `Interactive control has no accessible name: "${r.evidence.selector ?? '(unnamed)'}"` },
+  'keyboard-inaccessible': { bucket: 'defect', severity: 'high', title: (r) => `Interactive control cannot receive keyboard focus: "${r.evidence.selector ?? '(unknown)'}"` },
+  'missing-image-alt': { bucket: 'defect', severity: 'medium', title: (r) => `Informative image has no alt text: "${r.evidence.selector ?? 'image'}"` },
+  'invalid-aria-reference': { bucket: 'defect', severity: 'high', title: (r) => `ARIA relationship points to a missing element: "${r.evidence.selector ?? '(unknown)'}"` },
+  'invalid-aria-state': { bucket: 'defect', severity: 'high', title: (r) => `Invalid ${r.evidence.accessibility?.attribute ?? 'ARIA'} value on "${r.evidence.selector ?? '(unknown)'}"` },
+  'dialog-missing-label': { bucket: 'defect', severity: 'high', title: (r) => `Visible dialog has no accessible name: "${r.evidence.selector ?? '(dialog)'}"` },
   // Not a defect: the site asked us not to look, and we complied.
   'robots-blocked': { bucket: 'taste', severity: 'low', title: (r) => `Not crawled — robots.txt disallows ${r.evidence.url ?? 'this route'}` },
+  // Edge/WAF hold: the app never rendered. Not our bug and not a silent pass.
+  'bot-challenge': { bucket: 'taste', severity: 'medium', title: (r) => `Bot challenge interstitial${r.evidence.url ? ` (${r.evidence.url})` : ''} — crawl did not reach the app` },
+  'layout-overlap': {
+    bucket: 'defect',
+    severity: 'high',
+    title: (r) => `In-flow elements collide: "${r.evidence.selector ?? ''}" and "${r.evidence.layout?.otherSelector ?? ''}"`,
+  },
+  'text-overlap': {
+    bucket: 'defect',
+    severity: 'high',
+    title: (r) => `Text elements collide: "${r.evidence.selector ?? ''}" and "${r.evidence.layout?.otherSelector ?? ''}"`,
+  },
+  'text-line-collision': {
+    bucket: 'defect',
+    severity: 'high',
+    title: (r) => {
+      const t = r.evidence.typography;
+      return t?.directOverlap
+        ? `Line boxes overlap on multiline text: "${r.evidence.selector ?? ''}"`
+        : `Tight line-height (${t?.ratio ?? 'low'}) causes descender clash on "${r.evidence.selector ?? ''}"`;
+    },
+  },
+  'clipped-text': {
+    bucket: 'taste',
+    severity: 'medium',
+    title: (r) => `Text clipped by overflow:hidden without ellipsis: "${r.evidence.clipping?.textSample || r.evidence.selector || 'text'}"`,
+  },
+  'viewport-overflow': {
+    bucket: 'defect',
+    severity: 'high',
+    title: (r) => `Content horizontally overflows viewport at "${r.evidence.selector ?? 'page'}"`,
+  },
+  'pointer-intercepted': {
+    bucket: 'defect',
+    severity: 'high',
+    title: (r) =>
+      `Control click intercepted by overlay element "${r.evidence.hitTest?.interceptedBy ?? 'unknown'}": "${name(r)}"`,
+  },
+  'small-touch-target': {
+    bucket: 'taste',
+    severity: 'medium',
+    title: (r) => {
+      const sz = r.evidence.hitTest?.targetSize;
+      return `Clickable element is smaller than WCAG 24x24px touch target (${sz ? `${sz.width}x${sz.height}px` : 'small'}): "${name(r)}"`;
+    },
+  },
+  'dark-mode-contrast': {
+    bucket: 'defect',
+    severity: 'high',
+    title: (r) => {
+      const c = r.evidence.contrast;
+      return c
+        ? `Dark mode text contrast failure ${c.ratio}:1 (expected >= 4.5:1) for "${c.textSample || r.evidence.selector || 'text'}"`
+        : `Dark mode text contrast failure on element`;
+    },
+  },
 };
 
 function pct(z?: number): string {
@@ -83,7 +145,10 @@ function zoomVerdict(reply: string): 'broken' | 'ok' {
   return /\bbroken\b/.test(normalized) ? 'broken' : 'ok';
 }
 
-export function triageRaw(raw: RawFinding, ctx: { vision: VisionPort; text: TextTriagePort }): Finding {
+export async function triageRaw(
+  raw: RawFinding,
+  ctx: { vision: VisionPort; text: TextTriagePort },
+): Promise<Finding> {
   const rule = RULES[raw.kind];
   let bucket = rule.bucket;
   let severity = rule.severity;
@@ -91,7 +156,9 @@ export function triageRaw(raw: RawFinding, ctx: { vision: VisionPort; text: Text
 
   // A bare no-op button: optionally ask the text model whether it's contextual. Stays TASTE either way.
   if (raw.kind === 'maybe-contextual-button') {
-    const reply = ctx.text.complete({ system: CONTEXTUAL_SYSTEM, prompt: contextualPrompt(raw) }).trim();
+    const reply = (
+      await Promise.resolve(ctx.text.complete({ system: CONTEXTUAL_SYSTEM, prompt: contextualPrompt(raw) }))
+    ).trim();
     if (reply) {
       const verdict = contextualVerdict(reply);
       triage = { by: 'text', verdict, mode: 'model' };
@@ -107,7 +174,15 @@ export function triageRaw(raw: RawFinding, ctx: { vision: VisionPort; text: Text
   if (raw.kind === 'zoom-overlap' || raw.kind === 'zoom-clip') {
     bucket = 'taste';
     if (raw.evidence.screenshot) {
-      const reply = ctx.vision.judge({ imageRef: raw.evidence.screenshot, system: ZOOM_SYSTEM, prompt: 'Is the layout broken at this zoom?' }).trim();
+      const reply = (
+        await Promise.resolve(
+          ctx.vision.judge({
+            imageRef: raw.evidence.screenshot,
+            system: ZOOM_SYSTEM,
+            prompt: 'Is the layout broken at this zoom?',
+          }),
+        )
+      ).trim();
       if (reply) {
         const broken = zoomVerdict(reply) === 'broken';
         triage = { by: 'vision', verdict: broken ? 'broken' : 'ok', mode: 'model' };
@@ -142,6 +217,8 @@ export function triageRaw(raw: RawFinding, ctx: { vision: VisionPort; text: Text
     severity,
     title: rule.title(raw),
     evidence: raw.evidence,
+    source: raw.evidence.source,
+    remediation: raw.evidence.remediation,
     triage,
   };
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveConfig } from '../src/config.js';
+import { resolveConfig, crawlUserAgent } from '../src/config.js';
 
 describe('resolveConfig', () => {
   it('requires baseUrl', () => {
@@ -33,6 +33,34 @@ describe('resolveConfig', () => {
     expect(c.zoomLevels).toEqual([1, 1.5, 2]);
     expect(c.interactionTimeoutMs).toBe(1500);
     expect(c.headless).toBe(true);
+    expect(c.observeControls).toBe(false);
+    expect(c.guidance).toBe(true);
+    expect(c.networkInventory).toBe(true);
+    expect(c.userAgent).toBeUndefined();
+  });
+
+  it('honors observeControls when explicitly enabled', () => {
+    const c = resolveConfig({ baseUrl: 'http://x', observeControls: true });
+    expect(c.observeControls).toBe(true);
+  });
+
+  it('honors guidance / networkInventory / userAgent overrides', () => {
+    const c = resolveConfig({
+      baseUrl: 'http://example.com',
+      guidance: false,
+      networkInventory: false,
+      userAgent: 'my-bot/1.0',
+    });
+    expect(c.guidance).toBe(false);
+    expect(c.networkInventory).toBe(false);
+    expect(c.userAgent).toBe('my-bot/1.0');
+  });
+
+  it('crawlUserAgent: undefined on loopback, ui-crawl/ on real hosts, override wins', () => {
+    expect(crawlUserAgent('http://localhost:3000')).toBeUndefined();
+    expect(crawlUserAgent('http://127.0.0.1:8080')).toBeUndefined();
+    expect(crawlUserAgent('https://example.com')).toMatch(/^ui-crawl\//);
+    expect(crawlUserAgent('https://example.com', 'custom/1')).toBe('custom/1');
   });
 
   it('honors overrides', () => {

@@ -1,6 +1,7 @@
-import type { Page } from 'playwright';
+import type { Page, Request, Response } from 'playwright';
+import type { ApiCall } from './types.js';
 
-/** Per-page load + passive collectors (console errors, failed requests). Browser I/O. */
+/** Per-page load + passive collectors (console errors, failed requests, API calls). Browser I/O. */
 
 export interface PageLoad {
   status: number | null;
@@ -63,6 +64,8 @@ export async function gotoRoute(
 export interface Collectors {
   consoleErrors: string[];
   failedRequests: { url: string; status?: number; failure?: string }[];
+  /** XHR/fetch inventory (always collected; PageReport caps when serializing). */
+  apiCalls: ApiCall[];
   /**
    * Drop everything collected so far. A navigation attempt that got a retryable status
    * answered with throttle noise (a 503 console error, the failed document request), not
@@ -73,9 +76,31 @@ export interface Collectors {
   dispose(): void;
 }
 
-export function attachCollectors(page: Page): Collectors {
+/** Resource types that constitute a scraping-relevant API surface. */
+export function isApiRequest(resourceType: string, method: string): boolean {
+  if (resourceType === 'xhr' || resourceType === 'fetch') return true;
+  // Non-GET document requests are form/API navigations worth inventorying.
+  if (resourceType === 'document' && method !== 'GET' && method !== 'HEAD') return true;
+  return false;
+}
+
+/** Stable inventory key: same-origin → path+query; else absolute URL. */
+export function apiUrlKey(url: string, origin: string): string {
+  try {
+    const u = new URL(url);
+    if (u.origin === origin) return `${u.pathname}${u.search}`;
+    return u.href;
+  } catch {
+    return url;
+  }
+}
+
+export function attachCollectors(page: Page, origin?: string): Collectors {
   const consoleErrors: string[] = [];
   const failedRequests: { url: string; status?: number; failure?: string }[] = [];
+  const apiCalls: ApiCall[] = [];
+  const apiSeen = new Set<string>();
+  const selfOrigin = origin ?? '';
 
   const onConsole = (msg: { type(): string; text(): string }) => {
     if (msg.type() === 'error') consoleErrors.push(msg.text());
@@ -86,25 +111,52 @@ export function attachCollectors(page: Page): Collectors {
     if (f && /blockedbyclient/i.test(f.errorText)) return;
     failedRequests.push({ url: req.url(), failure: f?.errorText });
   };
-  const onResponse = (resp: { status(): number; url(): string }) => {
+  const onApiRequest = (req: Request) => {
+    if (!isApiRequest(req.resourceType(), req.method())) return;
+    const key = `${req.method()} ${apiUrlKey(req.url(), selfOrigin)}`;
+    if (apiSeen.has(key)) return;
+    apiSeen.add(key);
+    apiCalls.push({
+      method: req.method(),
+      url: apiUrlKey(req.url(), selfOrigin),
+      resourceType: req.resourceType(),
+    });
+  };
+  const onApiResponse = (resp: Response) => {
     if (resp.status() >= 400) failedRequests.push({ url: resp.url(), status: resp.status() });
+    const req = resp.request();
+    if (!isApiRequest(req.resourceType(), req.method())) return;
+    const key = `${req.method()} ${apiUrlKey(req.url(), selfOrigin)}`;
+    const hit = apiCalls.find(
+      (c) => `${c.method} ${c.url}` === key,
+    );
+    if (hit) {
+      hit.status = resp.status();
+      const ct = resp.headers()['content-type'];
+      if (ct) hit.contentType = ct;
+    }
   };
 
   page.on('console', onConsole);
   page.on('requestfailed', onRequestFailed);
-  page.on('response', onResponse);
+  page.on('request', onApiRequest);
+  page.on('response', onApiResponse);
 
   return {
     consoleErrors,
     failedRequests,
+    apiCalls,
     reset() {
       consoleErrors.length = 0;
       failedRequests.length = 0;
+      apiCalls.length = 0;
+      apiSeen.clear();
     },
     dispose() {
       page.off('console', onConsole);
       page.off('requestfailed', onRequestFailed);
-      page.off('response', onResponse);
+      page.off('request', onApiRequest);
+      page.off('response', onApiResponse);
     },
   };
 }

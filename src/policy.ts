@@ -49,13 +49,38 @@ function longestPrefix(prefixes: string[], path: string): number {
 
 export class PolitenessGate {
   private robots = new Map<string, RobotsRules>();
+  private robotsText = new Map<string, string | null>();
   private lastNav = new Map<string, number>();
 
   constructor(
     private readonly request: APIRequestContext,
     private readonly minIntervalMs: number,
     private readonly respectRobots: boolean,
+    private readonly userAgent?: string,
   ) {}
+
+  /**
+   * Fetch and cache raw robots.txt for an origin (null when missing/unreachable).
+   * Used by the guidance pack so we do not GET /robots.txt twice.
+   */
+  async peekRobots(origin: string): Promise<string | null> {
+    if (this.robotsText.has(origin)) return this.robotsText.get(origin) ?? null;
+    let text: string | null = null;
+    try {
+      const headers = this.userAgent ? { 'user-agent': this.userAgent } : undefined;
+      const res = await this.request.get(`${origin}/robots.txt`, {
+        timeout: 10_000,
+        failOnStatusCode: false,
+        ...(headers ? { headers } : {}),
+      });
+      if (res.status() === 200) text = await res.text();
+    } catch {
+      text = null;
+    }
+    this.robotsText.set(origin, text);
+    if (text !== null) this.robots.set(origin, parseRobots(text));
+    return text;
+  }
 
   /** False when robots.txt forbids this URL. Fails open: an unreachable robots.txt allows. */
   async allowed(url: string): Promise<boolean> {
@@ -69,14 +94,9 @@ export class PolitenessGate {
 
     const origin = parsed.origin;
     if (!this.robots.has(origin)) {
-      let rules: RobotsRules = { allow: [], disallow: [] };
-      try {
-        const res = await this.request.get(`${origin}/robots.txt`, { timeout: 10_000, failOnStatusCode: false });
-        if (res.status() === 200) rules = parseRobots(await res.text());
-      } catch {
-        /* fail open */
-      }
-      this.robots.set(origin, rules);
+      // Warm via peekRobots (shared UA + cache with the guidance pack).
+      await this.peekRobots(origin);
+      if (!this.robots.has(origin)) this.robots.set(origin, { allow: [], disallow: [] });
     }
     const rules = this.robots.get(origin) as RobotsRules;
     const path = parsed.pathname || '/';

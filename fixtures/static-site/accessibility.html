@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>accessibility fixture</title>
+    <style>
+      body { font-family: system-ui, sans-serif; padding: 24px; }
+      [role="button"] { display: inline-block; padding: 8px; border: 1px solid #888; }
+      img { width: 80px; height: 40px; }
+    </style>
+  </head>
+  <body>
+    <h1>Accessibility fixture</h1>
+    <button id="unnamed"></button>
+    <div role="button">Custom control</div>
+    <button aria-expanded="maybe" aria-controls="missing-panel">Menu</button>
+    <div role="dialog">Dialog content</div>
+    <img src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" />
+    <button aria-label="Named control">Named control</button>
+  </body>
+</html>

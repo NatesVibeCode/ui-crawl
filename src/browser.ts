@@ -1,27 +1,32 @@
 import { readFile } from 'node:fs/promises';
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 import type { ResolvedConfig } from './config.js';
+import { crawlUserAgent } from './config.js';
 
 export interface Session {
   browser: Browser;
   context: BrowserContext;
+  /** UA actually sent on this session (undefined = Chromium default on loopback). */
+  userAgent?: string;
 }
 
 /**
  * Build a context with the crawl's standing policy: viewport, storage state, seeded
- * storage, timeouts, and the two safety rails — downloads refused, and top-level
- * navigations to a different origin aborted (so an external link or a logout-to-SSO
- * can't carry the crawl off-site).
+ * storage, timeouts, honest User-Agent on non-loopback, and the two safety rails —
+ * downloads refused, and top-level navigations to a different origin aborted (so an
+ * external link or a logout-to-SSO can't carry the crawl off-site).
  */
 async function buildContext(
   browser: Browser,
   cfg: ResolvedConfig,
   viewport: { width: number; height: number },
-): Promise<BrowserContext> {
+): Promise<{ context: BrowserContext; userAgent?: string }> {
+  const userAgent = crawlUserAgent(cfg.origin, cfg.userAgent);
   const context = await browser.newContext({
     viewport,
     storageState: cfg.storageState,
     acceptDownloads: false,
+    ...(userAgent ? { userAgent } : {}),
   });
   context.setDefaultNavigationTimeout(cfg.navTimeoutMs);
   context.setDefaultTimeout(cfg.navTimeoutMs);
@@ -72,7 +77,7 @@ async function buildContext(
     void route.continue();
   });
 
-  return context;
+  return { context, userAgent };
 }
 
 export async function openSession(
@@ -80,8 +85,8 @@ export async function openSession(
   viewport: { width: number; height: number },
 ): Promise<Session> {
   const browser = await chromium.launch({ headless: cfg.headless });
-  const context = await buildContext(browser, cfg, viewport);
-  return { browser, context };
+  const { context, userAgent } = await buildContext(browser, cfg, viewport);
+  return { browser, context, userAgent };
 }
 
 /**

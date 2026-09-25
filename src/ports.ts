@@ -9,11 +9,13 @@
  *
  * Anti-spoof posture (inherited from the canon): an empty model reply means "no judgement",
  * which keeps a finding in `taste`. A model never silently promotes a thing to `defect`.
+ *
+ * Returns may be a Promise so real HTTP adapters work; callers always `await Promise.resolve(...)`.
  */
 
 /** Judge an image given a system + user prompt; return the raw model text. */
 export interface VisionPort {
-  judge(args: { imageRef: string; system: string; prompt: string }): string;
+  judge(args: { imageRef: string; system: string; prompt: string }): string | Promise<string>;
 }
 
 /** Default that binds no vision model. Empty reply => no escalation. */
@@ -25,7 +27,7 @@ export class NoopVisionPort implements VisionPort {
 
 /** Minimal text-completion port: prompt in, text (or JSON) out. */
 export interface TextTriagePort {
-  complete(args: { system: string; prompt: string }): string;
+  complete(args: { system: string; prompt: string }): string | Promise<string>;
 }
 
 /** Default that binds no text model. Empty reply => deterministic bucketing stands. */

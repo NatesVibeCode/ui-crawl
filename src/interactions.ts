@@ -1,14 +1,39 @@
-import type { Page, Route } from 'playwright';
+import type { Page, Route, Locator } from 'playwright';
 import type { Control, Signals, RawFinding } from './types.js';
 import type { ResolvedConfig } from './config.js';
 import { classifyChange, MUTATION_FLOOR } from './changeDetect.js';
 import { findRedundant } from './redundancy.js';
+import { relocateControl } from './snapshot.js';
+import { SELECTOR } from './selectors.js';
 
-/** Interactive elements we probe. DOM order here must match `page.locator(SELECTOR).nth(i)`. */
-export const SELECTOR = 'button, a[href], [role="button"], [onclick], input[type="submit"], input[type="button"]';
+export { SELECTOR };
 
 const DESTRUCTIVE_RE = /\b(delete|remove|destroy|sign\s?out|log\s?out|pay|charge|purchase|deactivate|cancel account)\b/i;
 const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+/** Pure: does this accessible name look destructive? Shared with observe merge. */
+export function isDestructiveLabel(name: string): boolean {
+  return DESTRUCTIVE_RE.test(name);
+}
+
+/**
+ * Resolve a control to a Playwright locator. Observed controls use `locator.css`;
+ * selector-sourced controls keep the classic `SELECTOR.nth(index)` key.
+ * Returns null when an explicit css locator no longer matches (stale — caller may relocate).
+ */
+export async function resolveControl(page: Page, c: Control): Promise<Locator | null> {
+  if (c.locator?.css) {
+    try {
+      const loc = page.locator(c.locator.css);
+      if ((await loc.count()) > 0) return loc.first();
+    } catch {
+      return null;
+    }
+    return null;
+  }
+  if (c.index >= 0) return page.locator(SELECTOR).nth(c.index);
+  return null;
+}
 
 /** Enumerate controls in DOM order. `navTarget` is set only for REAL navigations. */
 export async function enumerateControls(page: Page): Promise<Control[]> {
@@ -59,7 +84,7 @@ export async function enumerateControls(page: Page): Promise<Control[]> {
       return { index, tag, role, accessibleName, disabled, visible, navTarget, formAction, destructive: false };
     });
   });
-  for (const c of raw) c.destructive = DESTRUCTIVE_RE.test(c.accessibleName);
+  for (const c of raw) c.destructive = isDestructiveLabel(c.accessibleName);
   return raw as Control[];
 }
 
@@ -247,11 +272,34 @@ async function probeControl(
       })
       .catch(() => {});
 
+    const clickTimeout = Math.min(2500, cfg.navTimeoutMs);
+    let clicked = false;
     try {
-      await page.locator(SELECTOR).nth(c.index).click({ timeout: Math.min(2500, cfg.navTimeoutMs) });
+      const loc = await resolveControl(page, c);
+      if (loc) {
+        await loc.click({ timeout: clickTimeout });
+        clicked = true;
+      }
     } catch {
-      clickThrew = true;
+      clicked = false;
     }
+    if (!clicked) {
+      // Stale-selector self-heal: one unique re-locate by tag+name, then one retry.
+      const healed = await relocateControl(page, c.tag, c.accessibleName).catch(() => null);
+      if (healed && healed.css !== c.locator?.css) {
+        c.locator = healed;
+        try {
+          const loc = await resolveControl(page, c);
+          if (loc) {
+            await loc.click({ timeout: clickTimeout });
+            clicked = true;
+          }
+        } catch {
+          clicked = false;
+        }
+      }
+    }
+    if (!clicked) clickThrew = true;
 
     await observeClick(page, cfg, urlBefore, () => ({ networkRequests, dialogOpened, popupOpened }));
 

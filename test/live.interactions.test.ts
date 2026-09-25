@@ -88,4 +88,48 @@ describe.skipIf(!LIVE)('live interaction sweep', () => {
     expect(again.evidence.contrast!.textStart).toBe(c.textStart);
     expect(again.evidence.contrast!.textEnd).toBe(c.textEnd);
   }, 120_000);
+
+  it('finds accessibility defects at every configured viewport and attributes evidence', async () => {
+    const outDir = path.join(os.tmpdir(), `ui-crawl-accessibility-${process.pid}`);
+    const result = await crawl({
+      baseUrl,
+      routes: ['/accessibility.html'],
+      viewports: [
+        { width: 1280, height: 800, label: 'desktop' },
+        { width: 390, height: 844, label: 'mobile' },
+      ],
+      guidance: false,
+      networkInventory: false,
+      skipContrast: true,
+      skipSpacing: true,
+      skipAffordance: true,
+      skipZoom: true,
+      skipInteractionSweep: true,
+      outDir,
+      headless: true,
+    });
+
+    expect(result.pages).toHaveLength(2);
+    expect(new Set(result.pages.map((page) => page.viewport?.label))).toEqual(new Set(['desktop', 'mobile']));
+
+    const byViewport = new Map<string, Set<string>>();
+    for (const finding of result.findings) {
+      const label = finding.evidence.viewport?.label ?? 'unknown';
+      const kinds = byViewport.get(label) ?? new Set<string>();
+      kinds.add(finding.type);
+      byViewport.set(label, kinds);
+    }
+    for (const label of ['desktop', 'mobile']) {
+      expect(byViewport.get(label)).toEqual(
+        new Set([
+          'missing-accessible-name',
+          'keyboard-inaccessible',
+          'missing-image-alt',
+          'invalid-aria-reference',
+          'invalid-aria-state',
+          'dialog-missing-label',
+        ]),
+      );
+    }
+  }, 120_000);
 });

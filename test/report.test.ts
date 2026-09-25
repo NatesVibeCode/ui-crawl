@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildFindingsJson, buildGalleryHtml } from '../src/report.js';
+import { buildFindingsJson, buildAgentPayload } from '../src/report.js';
 import type { CrawlResult } from '../src/types.js';
 
 const result: CrawlResult = {
@@ -19,8 +19,23 @@ const result: CrawlResult = {
     },
   ],
   findings: [
-    { route: '/campaigns', type: 'dead-button', bucket: 'defect', severity: 'high', title: 'Dead: "Send"', evidence: { selector: 'button:nth(2)' } },
-    { route: '/campaigns', type: 'maybe-contextual-button', bucket: 'taste', severity: 'medium', title: 'Did nothing: "<script>"', evidence: {} },
+    {
+      route: '/campaigns',
+      type: 'dead-button',
+      bucket: 'defect',
+      severity: 'high',
+      title: 'Dead: "Send"',
+      evidence: { selector: 'button:nth(2)' },
+      remediation: 'Ensure click handler attaches to button:nth(2)',
+    },
+    {
+      route: '/campaigns',
+      type: 'maybe-contextual-button',
+      bucket: 'taste',
+      severity: 'medium',
+      title: 'Did nothing: "<script>"',
+      evidence: {},
+    },
   ],
 };
 
@@ -32,18 +47,48 @@ describe('report builders', () => {
     expect(parsed.findings).toHaveLength(2);
   });
 
-  it('gallery html is self-contained and escapes finding text', () => {
-    const html = buildGalleryHtml(result);
-    expect(html).toContain('<!doctype html>');
-    expect(html).toContain('ui-crawl report');
-    expect(html).toContain('/campaigns');
-    expect(html).toContain('1 defects');
-    // escaped, not injected:
-    expect(html).toContain('&lt;script&gt;');
-    expect(html).not.toContain('Did nothing: "<script>"');
+  it('buildAgentPayload produces machine-consumable action plan with verdict has_defects', () => {
+    const payload = buildAgentPayload(result);
+    expect(payload.verdict).toBe('has_defects');
+    expect(payload.summary.defects).toBe(1);
+    expect(payload.summary.taste).toBe(1);
+    expect(payload.summary.pagesCrawled).toBe(1);
+    expect(payload.routes).toEqual(['/campaigns']);
+    expect(payload.actions).toHaveLength(2);
+
+    const first = payload.actions[0];
+    expect(first.route).toBe('/campaigns');
+    expect(first.type).toBe('dead-button');
+    expect(first.bucket).toBe('defect');
+    expect(first.severity).toBe('high');
+    expect(first.selector).toBe('button:nth(2)');
+    expect(first.remediation).toBe('Ensure click handler attaches to button:nth(2)');
   });
 
-  it('renders contrast swatches and palette dots when present', () => {
+  it('buildAgentPayload correctly marks taste questions vs clean verdict', () => {
+    const tasteOnly: CrawlResult = {
+      ...result,
+      findings: [
+        {
+          route: '/campaigns',
+          type: 'low-contrast',
+          bucket: 'taste',
+          severity: 'medium',
+          title: 'Low contrast',
+          evidence: {},
+        },
+      ],
+    };
+    expect(buildAgentPayload(tasteOnly).verdict).toBe('has_taste_questions');
+
+    const cleanResult: CrawlResult = {
+      ...result,
+      findings: [],
+    };
+    expect(buildAgentPayload(cleanResult).verdict).toBe('clean');
+  });
+
+  it('preserves contrast, layout, and remediation in agent actions', () => {
     const richResult: CrawlResult = {
       baseUrl: 'http://localhost:3000',
       startedAt: '2026-06-21T00:00:00.000Z',
@@ -56,11 +101,6 @@ describe('report builders', () => {
           consoleErrors: [],
           failedRequests: [],
           controlCount: 2,
-          palette: {
-            backgrounds: ['#0d1117', '#161b22'],
-            text: ['#c9d1d9'],
-            accents: ['#58a6ff'],
-          },
         },
       ],
       findings: [
@@ -81,47 +121,38 @@ describe('report builders', () => {
               textSample: 'Subtle caption',
             },
           },
+          remediation: 'Change color from #777777 to darker tone #595959 for 4.5:1 contrast against #ffffff',
         },
-      ],
-    };
-    const html = buildGalleryHtml(richResult);
-    expect(html).toContain('palette-bar');
-    expect(html).toContain('#0d1117');
-    expect(html).toContain('#58a6ff');
-    expect(html).toContain('contrast-row');
-    expect(html).toContain('4.1:1');
-    expect(html).toContain('fg: #777777');
-  });
-
-  it('renders affordance badge and style transitions when present', () => {
-    const affordanceResult: CrawlResult = {
-      baseUrl: 'http://localhost:3000',
-      startedAt: '2026-06-21T00:00:00.000Z',
-      finishedAt: '2026-06-21T00:01:00.000Z',
-      pages: [],
-      findings: [
         {
-          route: '/settings',
-          type: 'missing-affordance',
-          bucket: 'taste',
-          severity: 'medium',
-          title: 'Missing affordance on button',
+          route: '/dashboard',
+          type: 'layout-overlap',
+          bucket: 'defect',
+          severity: 'high',
+          title: 'In-flow elements collide',
           evidence: {
-            selector: 'button:nth(0)',
-            affordance: {
-              checkedStyles: ['cursor', 'backgroundColor'],
-              hadPointer: false,
-              hadHoverChange: false,
-              hadFocusChange: false,
-              hadActiveChange: false,
+            selector: '.card-index',
+            layout: {
+              otherSelector: '.badge',
+              overlapFrac: 0.35,
             },
           },
+          remediation: 'Add flex-wrap: wrap to container',
         },
       ],
     };
-    const html = buildGalleryHtml(affordanceResult);
-    expect(html).toContain('affordance-row');
-    expect(html).toContain('cursor: default');
-    expect(html).toContain('no :hover delta');
+
+    const payload = buildAgentPayload(richResult);
+    expect(payload.verdict).toBe('has_defects');
+    expect(payload.actions).toHaveLength(2);
+
+    const contrastAct = payload.actions.find((a) => a.type === 'low-contrast')!;
+    expect(contrastAct.selector).toBe('p.muted');
+    expect(contrastAct.remediation).toContain('#595959');
+    expect(contrastAct.evidence?.contrast?.ratio).toBe(4.1);
+
+    const layoutAct = payload.actions.find((a) => a.type === 'layout-overlap')!;
+    expect(layoutAct.selector).toBe('.card-index');
+    expect(layoutAct.evidence?.layout?.otherSelector).toBe('.badge');
+    expect(layoutAct.remediation).toBe('Add flex-wrap: wrap to container');
   });
 });

@@ -1,85 +1,160 @@
 # @aidev/ui-crawl
 
-A standalone Playwright harness that drives a running dev server and sorts what it finds
-into two buckets:
+An agent-native Playwright UI auditing harness that drives a running web app or static directory, detects mechanical visual and layout defects, and outputs machine-consumable JSON payloads, indexed DOM snapshots, framework source-locations, and actionable CSS remediations.
 
-- **defect** — objectively broken: a control that threw, a link that goes nowhere, a page
-  that 500'd, a layout that clips/overlaps at zoom. Positive evidence of brokenness.
-- **taste** — a human decision: a button that did nothing (dead, or needs prior input?),
-  two controls to the same place, a borderline layout. **Silence is always taste, never a defect.**
+It assumes **no human is in the loop**. All outputs are deterministic, structured JSON payloads, token-efficient indexed DOM snapshots, and actionable CSS/DOM remediation instructions.
 
-It imports zero application code. Its only contract is a base URL. Point it at any running
-app. The deterministic core (v1) uses **no models** — every finding is trustworthy.
+---
 
-## Use
+## Capabilities
 
+- **Zero-Dependency Native SQLite Engine**: Tracks crawl runs, defect trends, and run-over-run diffs (`--db`, `--diff`, `--history`).
+- **Differential Auditing (`--diff`)**: Instantly categorizes findings into `fixed` (verifies agent repairs), `regressions` (detects accidental breakage), and `persistent`.
+- **Framework Source-to-DOM Grounding**: Inspects React Fiber (`_debugSource`), Vue (`__vnode`), Svelte (`__svelte_meta`), and data attributes, telling agents the exact `.tsx`/`.vue` file, line number, and component name.
+- **Pointer Physics & Hit-Testing**: Verifies `document.elementFromPoint` to catch ghost overlays, transparent interceptors (`pointer-intercepted`), and small touch targets (`small-touch-target`).
+- **Dual-Theme Dark Mode Sweep (`--theme-sweep`)**: Emulates dark mode to catch inverted contrast collapses and dark theme breakage.
+- **Multimodal Micro-Crops (`--crops`)**: Captures targeted $200\times200\text{px}$ base64 bounding-box PNG crops for visual/layout defects.
+- **DOM Layout Collision**: Detects in-flow sibling element overlaps, collision bounds, and container wrapping failures (`layout-overlap`).
+- **Typography Clash**: Detects descender/ascender ink collisions where line-height ratio is cramped (< 1.15) (`text-line-collision`).
+- **Clipped Text**: Identifies silent overflow truncation where `scrollWidth > clientWidth` (`clipped-text`).
+- **Viewport Blowout**: Catches horizontal layout blowout causing unwanted page scrollbars (`viewport-overflow`).
+- **WCAG Contrast**: High-precision luminance contrast checks with computed remediation recommendations (`low-contrast`).
+- **Interaction Probing**: Safe synthetic clicks on interactive controls verifying DOM mutations, network requests, and navigations (`dead-button`).
+- **LLM Semantic Snapshots**: High-density, token-efficient DOM snapshots with stable numbered indices for fast agent reasoning (`ui_snapshot`).
+- **Model Context Protocol (MCP)**: Native stdio JSON-RPC 2.0 server exposing `ui_audit`, `ui_diff`, `ui_history`, and `ui_snapshot` tools to coding agents.
+
+---
+
+## Quickstart
+
+### 1. Install & Build
 ```bash
-# one-time
 npm install
-npx playwright install chromium
-
-# crawl a running dev server
-npm run crawl -- --base-url http://localhost:3000 --routes /,/campaigns,/guests
-# or with a config file
-npm run crawl -- --config ./my-app.crawl.json
-
-# record a live page into an inspiration bundle
-npm run capture -- \
-  --url https://example.com \
-  --slug example \
-  --out ./articles/2026-07-10-ui-inspiration-capture \
-  --manifest ./articles/2026-07-10-ui-inspiration-capture/manifest.json
+npm run build
 ```
 
-Outputs `gallery.html` (a self-contained review queue, defects red / taste amber) and
-`findings.json` into `--out` (default `./ui-crawl-out`).
-
-`gallery.html` is for crawl defects/taste findings. It is **not** the UI Fieldwork
-reader. Inspiration capture review lives in the cumulative digital booklet built by
-the `daily-ui-inspiration-capture` skill:
-
+### 2. Run Audit via CLI
+Stdout emits pure, parseable JSON (`AgentPayload`):
 ```bash
-node ~/.codex/skills/daily-ui-inspiration-capture/scripts/build-ui-fieldwork-booklet.mjs
-# → articles/ui-fieldwork-booklet/index.html
+# Audit a live dev server
+node bin/ui-crawl.js --base-url http://localhost:3000 --routes /
+
+# Audit a static build output directory (serves locally automatically)
+node bin/ui-crawl.js --dir ./dist --routes /
+
+# Audit with dark-mode theme sweep and differential tracking against previous run
+node bin/ui-crawl.js --dir ./dist --routes / --theme-sweep --diff
 ```
 
-The motion capture command records a scripted four-beat scroll using Playwright's
-open-source browser video support, converts the result to MP4 with `ffmpeg`, extracts
-four PNG motion frames, and updates the matching manifest item when `--manifest` is
-provided. Use `--headed` when you need to watch the capture.
+### 3. Query Differential & Run History
+```bash
+# Show differential against the latest baseline run
+node bin/ui-crawl.js --diff
 
-### Config
+# Query run history
+node bin/ui-crawl.js --history --limit 5
+```
 
-```jsonc
+### 4. Capture Token-Efficient Page Snapshots
+```bash
+# Compact numbered list
+node bin/ui-crawl.js --snapshot --file ./index.html
+
+# Raw JSON array
+node bin/ui-crawl.js --snapshot --file ./index.html --json
+```
+
+### 5. Run as MCP Server
+```bash
+node bin/ui-crawl.js --mcp
+```
+
+Add to your agent or IDE config (e.g. `claude_desktop_config.json` or `.gemini`):
+```json
 {
-  "baseUrl": "http://localhost:3000",
-  "routes": ["/", "/campaigns", "/guests"], // or "discover" to follow links from /
-  "outDir": "./.ui-crawl-out",
-  "zoomLevels": [1, 1.5, 2],
-  "skipInteractionSweep": false,
-  "skipZoom": false
+  "mcpServers": {
+    "ui-crawl": {
+      "command": "node",
+      "args": ["/Users/nate/Public Repos/ui-crawl/bin/ui-crawl.js", "--mcp"]
+    }
+  }
 }
 ```
 
-CLI flags override the file: `--base-url`, `--out`, `--routes a,b,c`, `--max-pages N`,
-`--no-zoom`, `--no-clicks`, `--headed`.
+---
 
-## Safety
+## Output Schema (`AgentPayload`)
 
-It clicks real controls, so against a live dev DB it: dismisses confirm dialogs, refuses
-downloads, blocks cross-origin top-level navigation, and aborts mutating requests (POST/PUT/
-PATCH/DELETE) from controls whose label looks destructive (delete/remove/sign out/pay).
-
-## Tests
-
-```bash
-npm test            # pure, hermetic — no browser
-npm run test:live   # spins a fixture site + real chromium (UI_CRAWL_LIVE=1)
+```json
+{
+  "runId": "run_1790285831742_a146e4",
+  "verdict": "has_defects",
+  "summary": {
+    "defects": 1,
+    "taste": 0,
+    "pagesCrawled": 1,
+    "byType": {
+      "layout-overlap": 1
+    }
+  },
+  "actions": [
+    {
+      "id": "find_5c1b707a",
+      "fingerprint": "/::layout-overlap::.card-index",
+      "route": "/",
+      "type": "layout-overlap",
+      "bucket": "defect",
+      "severity": "high",
+      "selector": ".card-index",
+      "title": "In-flow elements collide",
+      "remediation": "Add flex-wrap: wrap to container .card-header",
+      "source": {
+        "file": "src/components/CardHeader.tsx",
+        "line": 42,
+        "component": "CardHeader"
+      },
+      "cropBase64": "data:image/png;base64,iVBORw0KGgo...",
+      "evidence": {
+        "layout": {
+          "otherSelector": ".research-badge",
+          "overlapFrac": 0.35
+        }
+      }
+    }
+  ],
+  "routes": ["/"],
+  "diff": {
+    "runA": "run_1790285828330_654b6a",
+    "runB": "run_1790285831742_a146e4",
+    "fixed": [
+      { "fingerprint": "/::low-contrast::p#faint", "title": "Low text contrast..." }
+    ],
+    "regressions": [],
+    "persistent": [
+      { "fingerprint": "/::layout-overlap::.card-index", "title": "In-flow elements collide" }
+    ]
+  }
+}
 ```
 
-## Injected models (v2, optional)
+### Exit Codes:
+- `0`: Clean run or taste questions only.
+- `1`: Mechanical defects detected (`has_defects`).
+- `2`: Configuration or runtime argument error.
 
-`crawl()` accepts `vision: VisionPort` and `text: TextTriagePort`. Both default to Noop, so
-the bucketing is identical with nothing wired. v2 binds a VLM (ambiguous-zoom judgment) and a
-cheap text model (no-op-button triage, i18n copy review) — and a model can only refine a
-finding, never silently invent a defect.
+---
+
+## Agent Integration Guide
+
+See [`AGENTS.md`](./AGENTS.md) for full machine contracts, MCP schemas, closed-loop remediation workflows, and agent execution policies.
+
+---
+
+## Development & Testing
+
+```bash
+npm run build      # Compile TypeScript to dist/
+npm test           # Hermetic test suite (< 1s)
+npm run test:live  # Live browser test suite (requires Chromium)
+npm run typecheck  # TypeScript strict type checking
+```

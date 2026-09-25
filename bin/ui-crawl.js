@@ -1,22 +1,43 @@
-#!/usr/bin/env tsx
+#!/usr/bin/env node
 import { readFile } from 'node:fs/promises';
-import {
+import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { existsSync } from 'node:fs';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const distEntry = path.join(__dirname, '../dist/index.js');
+
+let mod;
+if (existsSync(distEntry)) {
+  mod = await import('../dist/index.js');
+} else {
+  try {
+    mod = await import('../src/index.js');
+  } catch (err) {
+    console.error(
+      JSON.stringify({
+        error: 'ui-crawl: compiled files not found in dist/. Run "npm run build" first.',
+      }),
+    );
+    process.exit(1);
+  }
+}
+
+const {
   crawl,
-  type CrawlConfig,
   buildAgentPayload,
   buildFindingsJson,
   startMcpServer,
   snapshotUrl,
   formatSnapshot,
   serveStatic,
-  type StaticServer,
   openDatabase,
   getDiff,
   getRunHistory,
-} from '../src/index.js';
+} = mod;
 
-function parseFlags(args: string[]): Record<string, string | boolean> {
-  const out: Record<string, string | boolean> = {};
+function parseFlags(args) {
+  const out = {};
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (!a.startsWith('--')) continue;
@@ -37,7 +58,7 @@ function parseFlags(args: string[]): Record<string, string | boolean> {
   return out;
 }
 
-async function main(): Promise<void> {
+async function main() {
   const opts = parseFlags(process.argv.slice(2));
 
   // MCP Mode
@@ -101,8 +122,8 @@ async function main(): Promise<void> {
   }
 
   // Audit Crawl Mode
-  let config: Partial<CrawlConfig> = {};
-  if (opts.config) config = JSON.parse(await readFile(String(opts.config), 'utf8')) as Partial<CrawlConfig>;
+  let config = {};
+  if (opts.config) config = JSON.parse(await readFile(String(opts.config), 'utf8'));
   if (opts['base-url']) config.baseUrl = String(opts['base-url']);
   if (opts.out) config.outDir = String(opts.out);
   if (opts.routes) config.routes = String(opts.routes).split(',').map((s) => s.trim()).filter(Boolean);
@@ -128,7 +149,7 @@ async function main(): Promise<void> {
   if (opts['theme-sweep'] || opts['dark-mode']) config.themeSweep = true;
   if (opts.crops) config.captureCrops = true;
 
-  let staticServer: StaticServer | undefined;
+  let staticServer;
   const staticTarget = opts.dir ? String(opts.dir) : opts.file ? String(opts.file) : undefined;
   if (staticTarget) {
     staticServer = await serveStatic(staticTarget);
@@ -149,7 +170,7 @@ async function main(): Promise<void> {
       console.error(`[ui-crawl] auditing ${config.baseUrl}${staticTarget ? ` (serving ${staticTarget})` : ''}...`);
     }
 
-    const result = await crawl(config as CrawlConfig);
+    const result = await crawl(config);
     const output = opts.full ? buildFindingsJson(result) : JSON.stringify(buildAgentPayload(result), null, 2);
 
     process.stdout.write(output + '\n');

@@ -30,7 +30,10 @@ export async function zoomPass(
   const raw: RawFinding[] = [];
   const shots: { zoom: number; screenshot: string }[] = [];
 
-  const base = cfg.viewports[0];
+  // The crawl may be running this pass for any configured viewport. Read the page's
+  // actual size instead of always falling back to the first (usually desktop) viewport.
+  const current = page.viewportSize();
+  const base = current ?? cfg.viewports[0];
   for (const zoom of cfg.zoomLevels) {
     // Emulate browser zoom by narrowing the layout viewport, so the page reflows
     // responsively the way it does under real zoom — CSS `zoom` only scales the render

@@ -105,8 +105,9 @@ async function auditViaCDP(page: Page, controls: Control[]): Promise<Map<number,
       return map;
     };
 
-    // Audit up to first 40 active controls for ultra-fast response
-    const toProbe = controls.slice(0, 40);
+    // Audit up to first 40 active controls for ultra-fast response.
+    // Skip observed extras (index -1) — they are not addressed by SELECTOR node order.
+    const toProbe = controls.filter((c) => c.index >= 0).slice(0, 40);
     for (const c of toProbe) {
       const nodeId = nodeIds[c.index];
       if (!nodeId) continue;
@@ -158,7 +159,7 @@ async function auditViaCDP(page: Page, controls: Control[]): Promise<Map<number,
 }
 
 async function auditViaInPage(page: Page, controls: Control[]): Promise<Map<number, AffordanceCheck>> {
-  const indices = controls.map((c) => c.index);
+  const indices = controls.map((c) => c.index).filter((i) => i >= 0);
   const evalResult = await page
     .evaluate(
       ([selector, targetIndices]) => {

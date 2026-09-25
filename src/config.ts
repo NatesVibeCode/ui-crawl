@@ -26,6 +26,12 @@ export interface CrawlConfig {
   vision?: VisionPort;
   /** Injected text model (v2). Default Noop. */
   text?: TextTriagePort;
+  /**
+   * Ask the text port to observe controls the CSS inventory missed (menus, custom
+   * widgets) and merge them into the interaction sweep. Default false — opt-in so
+   * model spend never happens unless requested.
+   */
+  observeControls?: boolean;
   /** Where artifacts are written. Default FilesystemSink(outDir). */
   sink?: ReportSink;
   /** Output directory. Default './ui-crawl-out'. */
@@ -57,8 +63,33 @@ export interface CrawlConfig {
   skipAffordance?: boolean;
   /** Skip touch target & spacing checks. Default false. */
   skipSpacing?: boolean;
+  /** Skip pointer hit-testing and touch target size checks. Default false. */
+  skipHitTest?: boolean;
+  /** Skip layout collision, multiline typography, and text clipping checks. Default false. */
+  skipLayout?: boolean;
+  /**
+   * Fetch robots.txt / sitemap.xml / llms.txt once at start, save under
+   * outDir/guidance/, and seed discovery from sitemap+llms links. Default true
+   * (GET-only; disable with --no-guidance).
+   */
+  guidance?: boolean;
+  /**
+   * Record same-origin XHR/fetch calls per page (PageReport.apiCalls + apiIndex
+   * rollup). Default true. Disable with --no-network.
+   */
+  networkInventory?: boolean;
+  /** Override the honest crawl User-Agent (non-loopback default: ui-crawl/…). */
+  userAgent?: string;
   /** Run the browser headless. Default true. */
   headless?: boolean;
+  /** SQLite database path for run persistence and differential auditing. Default '.ui-crawl.db'. Set null to disable. */
+  dbPath?: string | null;
+  /** Compute differential against previous run (or specified run ID). Default false. */
+  diff?: boolean | string;
+  /** Run dual-theme sweep (both light and dark mode). Default false. */
+  themeSweep?: boolean;
+  /** Capture 200x200 micro-crop base64 PNGs for visual/layout defects. Default false. */
+  captureCrops?: boolean;
 }
 
 export interface ResolvedConfig {
@@ -72,6 +103,7 @@ export interface ResolvedConfig {
   seedStorage?: string | { localStorage?: Record<string, string>; sessionStorage?: Record<string, string> };
   vision: VisionPort;
   text: TextTriagePort;
+  observeControls: boolean;
   outDir: string;
   interactionTimeoutMs: number;
   navTimeoutMs: number;
@@ -84,10 +116,39 @@ export interface ResolvedConfig {
   skipContrast: boolean;
   skipAffordance: boolean;
   skipSpacing: boolean;
+  skipHitTest: boolean;
+  skipLayout: boolean;
+  guidance: boolean;
+  networkInventory: boolean;
+  userAgent?: string;
   headless: boolean;
+  dbPath?: string | null;
+  diff?: boolean | string;
+  themeSweep: boolean;
+  captureCrops: boolean;
 }
 
 const DEFAULT_VIEWPORT: Viewport = { width: 1280, height: 800, label: 'desktop' };
+
+/** Honest UA for non-loopback targets so logs and robots groups can identify us. */
+export const UI_CRAWL_UA_PREFIX = 'ui-crawl/';
+
+export function crawlUserAgent(origin: string, override?: string): string | undefined {
+  if (override) return override;
+  try {
+    const host = new URL(origin).hostname;
+    const loopback =
+      host === 'localhost' ||
+      host.endsWith('.localhost') ||
+      host === '::1' ||
+      host === '0.0.0.0' ||
+      /^127\./.test(host);
+    if (loopback) return undefined;
+  } catch {
+    return `${UI_CRAWL_UA_PREFIX}0.1 (+${origin})`;
+  }
+  return `${UI_CRAWL_UA_PREFIX}0.1 (+${origin})`;
+}
 
 function isPositiveFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0;
@@ -144,6 +205,7 @@ export function resolveConfig(c: CrawlConfig): ResolvedConfig {
     seedStorage: c.seedStorage,
     vision: c.vision ?? new NoopVisionPort(),
     text: c.text ?? new NoopTextTriagePort(),
+    observeControls: c.observeControls ?? false,
     outDir: c.outDir ?? './ui-crawl-out',
     interactionTimeoutMs: c.interactionTimeoutMs ?? 1500,
     navTimeoutMs: c.navTimeoutMs ?? 15000,
@@ -156,6 +218,15 @@ export function resolveConfig(c: CrawlConfig): ResolvedConfig {
     skipContrast: c.skipContrast ?? false,
     skipAffordance: c.skipAffordance ?? false,
     skipSpacing: c.skipSpacing ?? false,
+    skipHitTest: c.skipHitTest ?? false,
+    skipLayout: c.skipLayout ?? false,
+    guidance: c.guidance ?? true,
+    networkInventory: c.networkInventory ?? true,
+    userAgent: c.userAgent,
     headless: c.headless ?? true,
+    dbPath: c.dbPath !== undefined ? c.dbPath : '.ui-crawl.db',
+    diff: c.diff,
+    themeSweep: c.themeSweep ?? false,
+    captureCrops: c.captureCrops ?? false,
   };
 }

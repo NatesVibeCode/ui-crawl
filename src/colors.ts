@@ -383,6 +383,7 @@ export async function auditPageColors(
             textSample: s.textSample,
             ...(s.textStart === null ? {} : { textStart: s.textStart, textEnd: s.textEnd ?? undefined }),
           },
+          remediation: `Current contrast is ${s.ratio}:1 (expected >= ${s.requiredRatio}:1). Adjust foreground from ${s.fg} to meet contrast against background ${s.bg}.`,
         },
       });
     }
