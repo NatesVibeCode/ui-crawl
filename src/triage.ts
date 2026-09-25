@@ -125,6 +125,52 @@ const RULES: Record<FindingType, BaseRule> = {
     title: (r) =>
       `Vertical sibling blocks overlap: "${r.evidence.selector ?? 'element'}" into "${r.evidence.layout?.otherSelector ?? 'sibling'}"`,
   },
+  'text-border-collision': {
+    bucket: 'defect',
+    severity: 'high',
+    title: (r) =>
+      `Text ink collides with container border or divider: "${r.evidence.selector ?? 'text'}" into "${r.evidence.layout?.otherSelector ?? 'border'}"`,
+  },
+  'vertical-rhythm-drift': {
+    bucket: 'taste',
+    severity: 'low',
+    title: (r) => {
+      const rh = r.evidence.rhythm;
+      return rh
+        ? `Vertical rhythm fluctuates erratically (${rh.minGapPx}px vs ${rh.maxGapPx}px gap disparity) across sections`
+        : 'Erratic vertical rhythm between sibling sections';
+    },
+  },
+  'viewport-scale-imbalance': {
+    bucket: 'taste',
+    severity: 'medium',
+    title: (r) => {
+      const sc = r.evidence.scale;
+      return sc
+        ? `Hero heading consumes ${Math.round(sc.occupancyRatio * 100)}% of viewport height (${sc.headingHeightPx}px tall across ${sc.lineCount} lines): "${r.evidence.selector ?? 'heading'}"`
+        : 'Hero heading consumes excessive above-the-fold viewport height';
+    },
+  },
+  'unanchored-divider-bleed': {
+    bucket: 'taste',
+    severity: 'low',
+    title: (r) => {
+      const d = r.evidence.divider;
+      return d
+        ? `Divider line width (${d.lineWidthPx}px) bleeds past content column (${d.contentWidthPx}px) by ${d.bleedPx}px: "${r.evidence.selector ?? 'divider'}"`
+        : 'Divider line width unanchored from content grid';
+    },
+  },
+  'adjacent-wordmark-echo': {
+    bucket: 'taste',
+    severity: 'low',
+    title: (r) => {
+      const w = r.evidence.wordmark;
+      return w
+        ? `Header wordmark "${w.brandText}" repeated verbatim in adjacent hero subhead: "${w.echoText}"`
+        : 'Header wordmark repeated in adjacent hero subhead';
+    },
+  },
 };
 
 function pct(z?: number): string {

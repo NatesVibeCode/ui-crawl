@@ -63,7 +63,12 @@ export async function auditPageLayout(
           | 'clipped-text'
           | 'viewport-overflow'
           | 'container-overflow'
-          | 'sibling-overlap';
+          | 'sibling-overlap'
+          | 'text-border-collision'
+          | 'vertical-rhythm-drift'
+          | 'viewport-scale-imbalance'
+          | 'unanchored-divider-bleed'
+          | 'adjacent-wordmark-echo';
         selector: string;
         otherSelector?: string;
         remediation?: string;
@@ -78,6 +83,10 @@ export async function auditPageLayout(
         clientWidth?: number;
         textSample?: string;
         overflowPx?: number;
+        rhythm?: { minGapPx: number; maxGapPx: number; medianGapPx: number; ratio: number };
+        scale?: { headingHeightPx: number; viewportHeightPx: number; occupancyRatio: number; lineCount: number };
+        divider?: { lineWidthPx: number; contentWidthPx: number; bleedPx: number };
+        wordmark?: { brandText: string; echoText: string; distancePx: number };
       }[] = [];
 
       function selectorFor(el: Element, idx?: number): string {
@@ -392,6 +401,193 @@ export async function auditPageLayout(
         }
       }
 
+      // 5. Text-Border Collision Audit
+      // Detects when leaf text descenders/ink collide with or penetrate a container border
+      const textLeafCandidates = Array.from(
+        document.querySelectorAll('p, h1, h2, h3, h4, h5, h6, span, blockquote, li, .kicker, .eyebrow'),
+      ) as HTMLElement[];
+
+      for (let i = 0; i < textLeafCandidates.length && i < 150; i++) {
+        const el = textLeafCandidates[i];
+        if (!isVisible(el) || el.childElementCount > 2) continue;
+        const text = textOf(el);
+        if (text.length < 3) continue;
+
+        const parent = el.parentElement;
+        if (!parent || !isVisible(parent)) continue;
+
+        const parentStyle = window.getComputedStyle(parent);
+        const bBottom = parseFloat(parentStyle.borderBottomWidth || '0');
+        const pBottom = parseFloat(parentStyle.paddingBottom || '0');
+        const bTop = parseFloat(parentStyle.borderTopWidth || '0');
+        const pTop = parseFloat(parentStyle.paddingTop || '0');
+
+        const elRect = el.getBoundingClientRect();
+        const parentRect = parent.getBoundingClientRect();
+
+        // Bottom border collision (descender collision)
+        if (bBottom > 0 && parentStyle.borderBottomStyle !== 'none') {
+          const borderEdgeY = parentRect.bottom - bBottom;
+          if (elRect.bottom >= borderEdgeY - 1 && pBottom <= 2) {
+            findings.push({
+              kind: 'text-border-collision',
+              selector: selectorFor(el, i),
+              otherSelector: selectorFor(parent),
+              textSample: text.slice(0, 40),
+              remediation: `Text ink collides with bottom border of <${parent.tagName.toLowerCase()}>. Increase container padding-bottom (currently ${Math.round(pBottom)}px) or line-height.`,
+            });
+            continue;
+          }
+        }
+
+        // Top border collision
+        if (bTop > 0 && parentStyle.borderTopStyle !== 'none') {
+          const borderEdgeY = parentRect.top + bTop;
+          if (elRect.top <= borderEdgeY + 1 && pTop <= 2) {
+            findings.push({
+              kind: 'text-border-collision',
+              selector: selectorFor(el, i),
+              otherSelector: selectorFor(parent),
+              textSample: text.slice(0, 40),
+              remediation: `Text ink collides with top border of <${parent.tagName.toLowerCase()}>. Increase container padding-top (currently ${Math.round(pTop)}px).`,
+            });
+            continue;
+          }
+        }
+      }
+
+      // 6. Vertical Rhythm Drift Audit
+      // Checks consecutive top-level semantic sections for erratic spacing swings (e.g. 192px vs 24px)
+      const sections = Array.from(
+        document.querySelectorAll('main > section, main > article, body > section, .page-shell > section, section.section, [class*="section"]'),
+      ) as HTMLElement[];
+
+      const visibleSections = sections.filter((s) => isVisible(s) && s.getBoundingClientRect().height > 50 && s.getBoundingClientRect().width > 250);
+      if (visibleSections.length >= 3) {
+        const gaps: { index: number; gap: number; el: HTMLElement }[] = [];
+        for (let i = 0; i < visibleSections.length - 1; i++) {
+          const a = visibleSections[i];
+          const b = visibleSections[i + 1];
+          const rA = a.getBoundingClientRect();
+          const rB = b.getBoundingClientRect();
+          const gap = Math.round(rB.top - rA.bottom);
+          if (gap >= 0 && gap < 800) {
+            gaps.push({ index: i, gap, el: a });
+          }
+        }
+
+        if (gaps.length >= 2) {
+          const sorted = [...gaps].sort((x, y) => x.gap - y.gap);
+          const minGap = sorted[0].gap;
+          const maxGap = sorted[sorted.length - 1].gap;
+          const medianGap = sorted[Math.floor(sorted.length / 2)].gap;
+          const ratio = minGap > 0 ? maxGap / minGap : maxGap;
+
+          if (maxGap >= 150 && minGap <= 40 && ratio >= 3.0) {
+            const worst = sorted[sorted.length - 1];
+            findings.push({
+              kind: 'vertical-rhythm-drift',
+              selector: selectorFor(worst.el),
+              rhythm: { minGapPx: minGap, maxGapPx: maxGap, medianGapPx: medianGap, ratio: Math.round(ratio * 10) / 10 },
+              remediation: `Vertical rhythm fluctuates erratically (${minGap}px vs ${maxGap}px gap disparity, ${Math.round(ratio * 10) / 10}x ratio). Standardize section padding using consistent spacing tokens.`,
+            });
+          }
+        }
+      }
+
+      // 7. Viewport Scale Imbalance Audit (Above the fold heading proportion)
+      const winH = window.innerHeight;
+      const primaryH1 = document.querySelector('h1') as HTMLElement | null;
+      if (primaryH1 && isVisible(primaryH1)) {
+        const h1Rect = primaryH1.getBoundingClientRect();
+        if (h1Rect.top < winH) {
+          const occupancy = h1Rect.height / winH;
+          const range = document.createRange();
+          range.selectNodeContents(primaryH1);
+          const lineRects = Array.from(range.getClientRects()).filter((r) => r.width > 0 && r.height > 0);
+          const lines: { top: number }[] = [];
+          for (const r of lineRects) {
+            if (!lines.some((l) => Math.abs(l.top - r.top) < 6)) lines.push({ top: r.top });
+          }
+          const lineCount = lines.length;
+
+          if (occupancy > 0.35 || (h1Rect.height > 240 && lineCount >= 4)) {
+            findings.push({
+              kind: 'viewport-scale-imbalance',
+              selector: selectorFor(primaryH1),
+              scale: {
+                headingHeightPx: Math.round(h1Rect.height),
+                viewportHeightPx: winH,
+                occupancyRatio: Math.round(occupancy * 100) / 100,
+                lineCount,
+              },
+              remediation: `Hero heading consumes ${Math.round(occupancy * 100)}% of initial viewport height (${Math.round(h1Rect.height)}px tall across ${lineCount} lines). Scale down heading font size clamp or increase max-width to keep CTAs above the fold.`,
+            });
+          }
+        }
+      }
+
+      // 8. Unanchored Divider Bleed Audit
+      // Checks divider lines that break out of the content grid without full-bleed semantics
+      const containerEl = document.querySelector('.container, [class*="container"]') as HTMLElement | null;
+      if (containerEl && isVisible(containerEl)) {
+        const cRect = containerEl.getBoundingClientRect();
+        const contentWidth = cRect.width;
+        if (contentWidth > 200 && contentWidth < window.innerWidth - 16) {
+          const dividers = Array.from(document.querySelectorAll('hr, .divider, [class*="divider"], .rule')) as HTMLElement[];
+          for (const div of dividers) {
+            if (!isVisible(div)) continue;
+            const dRect = div.getBoundingClientRect();
+            const bleed = dRect.width - contentWidth;
+            if (bleed > 20 && !div.classList.contains('full-bleed') && !div.classList.contains('bleed')) {
+              findings.push({
+                kind: 'unanchored-divider-bleed',
+                selector: selectorFor(div),
+                divider: {
+                  lineWidthPx: Math.round(dRect.width),
+                  contentWidthPx: Math.round(contentWidth),
+                  bleedPx: Math.round(bleed),
+                },
+                remediation: `Divider line width (${Math.round(dRect.width)}px) exceeds the page content column (${Math.round(contentWidth)}px) by ${Math.round(bleed)}px. Constrain divider width to match the content grid.`,
+              });
+              break;
+            }
+          }
+        }
+      }
+
+      // 9. Adjacent Wordmark Echo Audit
+      // Checks if header brand wordmark repeats verbatim in the immediately adjacent hero kicker
+      const wordmarkEl = document.querySelector('header .wordmark, header [class*="brand"], header [class*="logo"], header a:first-child') as HTMLElement | null;
+      if (wordmarkEl && isVisible(wordmarkEl)) {
+        const brandText = textOf(wordmarkEl).trim();
+        if (brandText.length >= 3) {
+          const heroSub = document.querySelector('.hero .kicker, .hero .eyebrow, .hero-copy .kicker, main .kicker') as HTMLElement | null;
+          if (heroSub && isVisible(heroSub)) {
+            const subText = textOf(heroSub).trim();
+            const wRect = wordmarkEl.getBoundingClientRect();
+            const sRect = heroSub.getBoundingClientRect();
+            const distY = sRect.top - wRect.bottom;
+            if (distY >= 0 && distY < 150) {
+              const normBrand = brandText.toLowerCase().replace(/[^a-z0-9]/g, '');
+              const normSub = subText.toLowerCase().replace(/[^a-z0-9]/g, '');
+              if (normBrand.length >= 3 && normSub.startsWith(normBrand)) {
+                findings.push({
+                  kind: 'adjacent-wordmark-echo',
+                  selector: selectorFor(heroSub),
+                  wordmark: {
+                    brandText,
+                    echoText: subText.slice(0, 50),
+                    distancePx: Math.round(distY),
+                  },
+                  remediation: `Header wordmark text "${brandText}" is immediately repeated in the adjacent hero kicker. Remove duplicate brand naming for cleaner visual hierarchy.`,
+                });
+              }
+            }
+          }
+        }
+      }
+
       return findings;
     })
     .catch(() => []);
@@ -421,6 +617,10 @@ export async function auditPageLayout(
         clientWidth: iss.clientWidth,
         textSample: iss.textSample,
       } : undefined,
+      rhythm: iss.rhythm,
+      scale: iss.scale,
+      divider: iss.divider,
+      wordmark: iss.wordmark,
     },
   }));
 }

@@ -48,19 +48,33 @@ export async function enumerateControls(page: Page): Promise<Control[]> {
       const role = el.getAttribute('role') || undefined;
       const disabled = el.hasAttribute('disabled') || el.getAttribute('aria-disabled') === 'true';
       const rect = el.getBoundingClientRect();
-      const isOffScreen = rect.top < -200 || rect.left < -200 || rect.bottom > 200000;
-      const isSkipLink = (el.classList.contains('skip-link') || (tag === 'a' && (el.getAttribute('href') || '').startsWith('#'))) && isOffScreen;
+      const isOffScreen = rect.bottom <= 0 || rect.right <= 0 || rect.top < -30 || rect.left < -30 || rect.bottom > 200000;
+      const href = el.getAttribute('href') || '';
+      const rawText = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      const textLower = rawText.toLowerCase();
+      const isSkipLink =
+        el.classList.contains('skip-link') ||
+        textLower.includes('skip to') ||
+        textLower.includes('skip navigation') ||
+        (tag === 'a' && href.startsWith('#') && isOffScreen);
       const style = window.getComputedStyle(el);
-      const visible = rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none' && !isSkipLink;
+      const visible =
+        rect.width > 0 &&
+        rect.height > 0 &&
+        style.visibility !== 'hidden' &&
+        style.display !== 'none' &&
+        !isSkipLink &&
+        !isOffScreen;
 
       const aria = el.getAttribute('aria-label');
-      const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
       const title = el.getAttribute('title') || '';
-      const accessibleName = (aria && aria.trim() ? aria.trim() : text || title).slice(0, 80);
+      const accessibleName = (aria && aria.trim() ? aria.trim() : rawText || title).slice(0, 80);
+
+      const landmarkEl = el.closest('header, nav, footer, aside, main, dialog');
+      const landmark = (landmarkEl ? landmarkEl.tagName.toLowerCase() : 'other') as Control['landmark'];
 
       let navTarget: string | undefined;
       if (tag === 'a') {
-        const href = el.getAttribute('href') || '';
         if (href && !href.toLowerCase().startsWith('javascript:')) {
           try {
             const u = new URL(href, document.baseURI);
@@ -74,17 +88,20 @@ export async function enumerateControls(page: Page): Promise<Control[]> {
 
       let formAction: string | undefined;
       if (tag === 'input' || tag === 'button') {
-        const form = el.closest('form');
-        if (form) {
-          try {
-            formAction = new URL(form.getAttribute('action') || '', document.baseURI).href;
-          } catch {
-            /* ignore */
+        const btnType = (el.getAttribute('type') || (tag === 'button' ? 'submit' : '')).toLowerCase();
+        if (btnType === 'submit') {
+          const form = el.closest('form');
+          if (form) {
+            try {
+              formAction = new URL(form.getAttribute('action') || '', document.baseURI).href;
+            } catch {
+              /* ignore */
+            }
           }
         }
       }
 
-      return { index, tag, role, accessibleName, disabled, visible, navTarget, formAction, destructive: false };
+      return { index, tag, role, accessibleName, disabled, visible, navTarget, formAction, destructive: false, landmark };
     });
   });
   for (const c of raw) c.destructive = isDestructiveLabel(c.accessibleName);

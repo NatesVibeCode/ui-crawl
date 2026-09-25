@@ -59,4 +59,64 @@ describe('layout: auditPageLayout mapping', () => {
     expect(findings[1].evidence.layout?.otherSelector).toBe('.section-intro');
     expect(findings[1].evidence.layout?.overflowPx).toBe(12);
   });
+
+  it('maps new macro layout and taste findings accurately', async () => {
+    const mockPage = {
+      evaluate: vi.fn().mockResolvedValue([
+        {
+          kind: 'text-border-collision',
+          selector: 'p.descender',
+          otherSelector: 'section.container',
+          textSample: 'package you own.',
+          remediation: 'Increase container padding-bottom or line-height.',
+        },
+        {
+          kind: 'vertical-rhythm-drift',
+          selector: 'section:nth(1)',
+          rhythm: { minGapPx: 24, maxGapPx: 192, medianGapPx: 48, ratio: 8.0 },
+          remediation: 'Standardize section padding using consistent spacing tokens.',
+        },
+        {
+          kind: 'viewport-scale-imbalance',
+          selector: 'h1',
+          scale: { headingHeightPx: 320, viewportHeightPx: 800, occupancyRatio: 0.4, lineCount: 4 },
+          remediation: 'Scale down heading font size clamp.',
+        },
+        {
+          kind: 'unanchored-divider-bleed',
+          selector: 'hr',
+          divider: { lineWidthPx: 1024, contentWidthPx: 1004, bleedPx: 20 },
+          remediation: 'Constrain divider width to match the content grid.',
+        },
+        {
+          kind: 'adjacent-wordmark-echo',
+          selector: '.hero .kicker',
+          wordmark: { brandText: 'Æstrum', echoText: 'Æstrum outcome delivery', distancePx: 40 },
+          remediation: 'Remove duplicate brand naming for cleaner visual hierarchy.',
+        },
+      ]),
+    } as unknown as import('playwright').Page;
+
+    const findings = await auditPageLayout(mockPage, '/test');
+    expect(findings).toHaveLength(5);
+
+    expect(findings[0].kind).toBe('text-border-collision');
+    expect(findings[0].evidence.selector).toBe('p.descender');
+    expect(findings[0].evidence.layout?.otherSelector).toBe('section.container');
+
+    expect(findings[1].kind).toBe('vertical-rhythm-drift');
+    expect(findings[1].evidence.rhythm?.maxGapPx).toBe(192);
+    expect(findings[1].evidence.rhythm?.ratio).toBe(8.0);
+
+    expect(findings[2].kind).toBe('viewport-scale-imbalance');
+    expect(findings[2].evidence.scale?.occupancyRatio).toBe(0.4);
+    expect(findings[2].evidence.scale?.lineCount).toBe(4);
+
+    expect(findings[3].kind).toBe('unanchored-divider-bleed');
+    expect(findings[3].evidence.divider?.bleedPx).toBe(20);
+
+    expect(findings[4].kind).toBe('adjacent-wordmark-echo');
+    expect(findings[4].evidence.wordmark?.brandText).toBe('Æstrum');
+    expect(findings[4].evidence.wordmark?.distancePx).toBe(40);
+  });
 });

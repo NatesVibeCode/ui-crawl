@@ -28,19 +28,26 @@ function destinationOf(c: Control): string | null {
   return normalizeDestination(trimmed);
 }
 
+function landmarkKey(c: Control): string {
+  if (!c.landmark) return 'default';
+  if (c.landmark === 'header' || c.landmark === 'nav') return 'nav';
+  return c.landmark;
+}
+
 export function findRedundant(controls: Control[]): RedundantGroup[] {
-  const byDest = new Map<string, Control[]>();
+  const byKey = new Map<string, { destination: string; controls: Control[] }>();
   for (const c of controls) {
     if (c.disabled) continue;
     const dest = destinationOf(c);
     if (!dest) continue;
-    const list = byDest.get(dest) ?? [];
-    list.push(c);
-    byDest.set(dest, list);
+    const key = `${dest}::${landmarkKey(c)}`;
+    const entry = byKey.get(key) ?? { destination: dest, controls: [] };
+    entry.controls.push(c);
+    byKey.set(key, entry);
   }
   const groups: RedundantGroup[] = [];
-  for (const [destination, list] of byDest) {
-    if (list.length >= 2) groups.push({ destination, controls: list });
+  for (const entry of byKey.values()) {
+    if (entry.controls.length >= 2) groups.push(entry);
   }
   return groups;
 }

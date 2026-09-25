@@ -41,7 +41,12 @@ export type FindingType =
   | 'small-touch-target' // clickable element smaller than WCAG 24x24px minimum
   | 'dark-mode-contrast' // text fails contrast in dark mode
   | 'container-overflow' // child element bleeds past bottom of its container
-  | 'sibling-overlap'; // consecutive sibling sections overlap vertically
+  | 'sibling-overlap' // consecutive sibling sections overlap vertically
+  | 'text-border-collision' // leaf text descenders/ink collide with container border or divider rule (defect)
+  | 'vertical-rhythm-drift' // irregular vertical spacing jumps between sibling sections (taste)
+  | 'viewport-scale-imbalance' // hero heading consumes >35% of above-the-fold viewport height (taste)
+  | 'unanchored-divider-bleed' // horizontal divider line width exceeds page content grid boundaries (taste)
+  | 'adjacent-wordmark-echo'; // site wordmark text immediately repeated in adjacent hero subhead (taste)
 
 export interface SourceLocation {
   file?: string;
@@ -100,6 +105,8 @@ export interface Control {
   source?: 'selector' | 'observe';
   /** Explicit re-location strategy when `index` cannot address the element. */
   locator?: { css: string };
+  /** Structural HTML landmark container where the control resides. */
+  landmark?: 'header' | 'nav' | 'main' | 'footer' | 'aside' | 'section' | 'dialog' | 'other';
 }
 
 export interface Evidence {
@@ -179,6 +186,28 @@ export interface Evidence {
     interceptedBy?: string;
     bounds?: Box;
     targetSize?: { width: number; height: number };
+  };
+  rhythm?: {
+    minGapPx: number;
+    maxGapPx: number;
+    medianGapPx: number;
+    ratio: number;
+  };
+  scale?: {
+    headingHeightPx: number;
+    viewportHeightPx: number;
+    occupancyRatio: number;
+    lineCount: number;
+  };
+  divider?: {
+    lineWidthPx: number;
+    contentWidthPx: number;
+    bleedPx: number;
+  };
+  wordmark?: {
+    brandText: string;
+    echoText: string;
+    distancePx: number;
   };
 }
 

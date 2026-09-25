@@ -59,4 +59,23 @@ describe('findRedundant', () => {
   it('a single control is not redundant', () => {
     expect(findRedundant([ctrl({ navTarget: 'http://x/a' })])).toHaveLength(0);
   });
+
+  it('does NOT group header/nav controls with footer or main controls (standard site architecture)', () => {
+    const groups = findRedundant([
+      ctrl({ index: 0, accessibleName: 'Solutions', navTarget: 'http://x/solutions', landmark: 'nav' }),
+      ctrl({ index: 1, accessibleName: 'What we build', navTarget: 'http://x/solutions', landmark: 'main' }),
+      ctrl({ index: 2, accessibleName: 'Solutions ↗', navTarget: 'http://x/solutions', landmark: 'footer' }),
+    ]);
+    expect(groups).toHaveLength(0);
+  });
+
+  it('groups duplicate controls within the same landmark', () => {
+    const groups = findRedundant([
+      ctrl({ index: 0, accessibleName: 'Solutions', navTarget: 'http://x/solutions', landmark: 'nav' }),
+      ctrl({ index: 1, accessibleName: 'Solutions Mobile', navTarget: 'http://x/solutions', landmark: 'header' }),
+      ctrl({ index: 2, accessibleName: 'Contact', navTarget: 'http://x/contact', landmark: 'main' }),
+      ctrl({ index: 3, accessibleName: 'Get in touch', navTarget: 'http://x/contact', landmark: 'main' }),
+    ]);
+    expect(groups).toHaveLength(2);
+  });
 });

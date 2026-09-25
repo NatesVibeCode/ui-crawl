@@ -36,6 +36,11 @@ describe('triageRaw (Noop ports = deterministic v1)', () => {
     ['text-line-collision', 'defect'],
     ['clipped-text', 'taste'],
     ['viewport-overflow', 'defect'],
+    ['text-border-collision', 'defect'],
+    ['vertical-rhythm-drift', 'taste'],
+    ['viewport-scale-imbalance', 'taste'],
+    ['unanchored-divider-bleed', 'taste'],
+    ['adjacent-wordmark-echo', 'taste'],
   ];
   for (const [kind, bucket] of expectations) {
     it(`${kind} -> ${bucket}`, async () => {
