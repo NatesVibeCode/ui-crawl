@@ -1,10 +1,10 @@
 import { mkdir } from 'node:fs/promises';
 import * as path from 'node:path';
-import type { Page } from 'playwright';
+import type { Page, Browser } from 'playwright';
 import { resolveConfig, type CrawlConfig } from './config.js';
 import type { CrawlResult, PageReport, RawFinding, ColorPalette } from './types.js';
 import { toRouteTemplate } from './routeTemplate.js';
-import { openSession, closeSession, newPage } from './browser.js';
+import { openSession, closeSession, newPage, buildContext } from './browser.js';
 import { gotoRoute, attachCollectors, dedupeRequests } from './capture.js';
 import { enumerateControls, sweepControls } from './interactions.js';
 import { auditPageAccessibility } from './accessibility.js';
@@ -162,6 +162,287 @@ function buildApiIndex(pages: PageReport[]): { method: string; url: string; page
   return [...map.values()].sort((a, b) => a.url.localeCompare(b.url));
 }
 
+interface VisitTask {
+  index: number;
+  route: string;
+  viewport: import('./config.js').Viewport;
+}
+
+interface VisitResult {
+  taskIndex: number;
+  page: PageReport;
+  rawFindings: RawFinding[];
+}
+
+async function executeVisit(
+  browser: Browser,
+  cfg: import('./config.js').ResolvedConfig,
+  gate: PolitenessGate,
+  task: VisitTask,
+  totalVisits: number,
+): Promise<VisitResult> {
+  const { index, route, viewport } = task;
+  const viewportEvidence = { width: viewport.width, height: viewport.height, label: viewport.label };
+  const viewportSuffix = cfg.viewports.length > 1 ? `--${slug(viewport.label ?? `${viewport.width}x${viewport.height}`)}` : '';
+  const vpLabel = viewport.label ?? `${viewport.width}x${viewport.height}`;
+
+  const progressMsg = `[ui-crawl] [${index}/${totalVisits}] ${route} (${vpLabel})...`;
+  process.stderr.write(progressMsg + '\n');
+  cfg.onProgress?.({ phase: 'page-start', route, pageIndex: index, totalPages: totalVisits, message: progressMsg });
+
+  const rawFindings: RawFinding[] = [];
+  const url = cfg.baseUrl + route;
+
+  if (!(await gate.allowed(url))) {
+    rawFindings.push({ route, kind: 'robots-blocked', evidence: { url, viewport: viewportEvidence } });
+    return {
+      taskIndex: index,
+      page: {
+        route,
+        template: toRouteTemplate(route),
+        viewport: viewportEvidence,
+        status: null,
+        consoleErrors: [],
+        failedRequests: [],
+        controlCount: 0,
+      },
+      rawFindings,
+    };
+  }
+
+  const { context } = await buildContext(browser, cfg, { width: viewport.width, height: viewport.height });
+  const page = await context.newPage();
+
+  try {
+    const collectors = attachCollectors(page, cfg.origin);
+    const load = await gotoRoute(page, url, cfg.navTimeoutMs, {
+      attempts: cfg.navRetries,
+      beforeAttempt: () => gate.pace(url),
+      onRetry: () => collectors.reset(),
+    });
+    const artifactSlug = `${slug(route)}${viewportSuffix}`;
+    const baseShot = await shoot(page, cfg.outDir, artifactSlug);
+
+    // Bot-challenge interstitial: app never rendered — swap the load finding and skip audits.
+    let challenged = false;
+    try {
+      const title = await page.title();
+      const bodyTextSample = await page
+        .evaluate(() => (document.body?.innerText || '').replace(/\s+/g, ' ').slice(0, 2000))
+        .catch(() => '');
+      const mainRespHeaders: Record<string, string> = {};
+      challenged = isChallengePage({
+        status: load.status,
+        url,
+        title,
+        bodyTextSample,
+        headers: mainRespHeaders,
+      });
+    } catch {
+      challenged = false;
+    }
+
+    let controls: Awaited<ReturnType<typeof enumerateControls>> = [];
+    if (!challenged) {
+      controls = await enumerateControls(page).catch(() => []);
+      if (cfg.observeControls && !(cfg.text instanceof NoopTextTriagePort)) {
+        const extras = await observeExtraControls(page, cfg.text);
+        if (extras.length) controls = [...controls, ...extras];
+      }
+    }
+
+    let apiCalls: ApiCall[] | undefined;
+    let apiCallsOverflow: number | undefined;
+    if (cfg.networkInventory) {
+      const all = collectors.apiCalls;
+      apiCallsOverflow = Math.max(0, all.length - API_CALL_CAP);
+      apiCalls = all.slice(0, API_CALL_CAP);
+    }
+    collectors.dispose();
+
+    if (challenged) {
+      rawFindings.push({
+        route,
+        kind: 'bot-challenge',
+        evidence: {
+          url,
+          screenshot: baseShot,
+          consoleText: [`HTTP ${load.status ?? 'challenge'}${challengeSeverity(load.status) === 'high' ? ' (hard block)' : ''}`],
+        },
+      });
+    } else {
+      if (load.status && load.status >= 400) {
+        rawFindings.push({ route, kind: 'page-load-error', evidence: { url, screenshot: baseShot } });
+      }
+      if (load.loadError) {
+        rawFindings.push({ route, kind: 'page-load-error', evidence: { url, screenshot: baseShot, consoleText: [load.loadError] } });
+      }
+      for (const ce of collectors.consoleErrors) {
+        rawFindings.push({ route, kind: 'console-error', evidence: { url, screenshot: baseShot, consoleText: [ce] } });
+      }
+      const dedupedFailed = dedupeRequests(collectors.failedRequests);
+      for (const fr of dedupedFailed) {
+        if (fr.url === url) continue;
+        rawFindings.push({
+          route,
+          kind: 'broken-asset',
+          evidence: {
+            url: fr.url,
+            consoleText: [fr.status ? `HTTP ${fr.status}` : (fr.failure ?? 'Failed')],
+          },
+        });
+      }
+    }
+    const dedupedFailed = challenged ? [] : dedupeRequests(collectors.failedRequests);
+
+    let palette: ColorPalette | undefined;
+    let textDigest: number | undefined;
+    let textLength: number | undefined;
+    if (!challenged && !cfg.skipContrast) {
+      const colorAudit = await auditPageColors(page, route).catch(() => ({ rawFindings: [], palette: undefined, textDigest: undefined, textLength: undefined }));
+      rawFindings.push(...colorAudit.rawFindings);
+      palette = colorAudit.palette;
+      textDigest = colorAudit.textDigest;
+      textLength = colorAudit.textLength;
+    }
+
+    if (!challenged && !cfg.skipSpacing) {
+      const spacingFindings = await auditPageSpacing(page, route).catch(() => []);
+      rawFindings.push(...spacingFindings);
+    }
+
+    if (!challenged && !cfg.skipLayout) {
+      const layoutFindings = await auditPageLayout(page, route, { viewport: viewportEvidence }).catch(() => []);
+      rawFindings.push(...layoutFindings);
+      const tabFindings = await auditTabPanels(page, route).catch(() => []);
+      rawFindings.push(...tabFindings);
+    }
+
+    if (!challenged && !cfg.skipAffordance) {
+      const affordanceFindings = await auditPageAffordance(page, route, controls).catch(() => []);
+      rawFindings.push(...affordanceFindings);
+    }
+
+    if (!challenged && !cfg.skipHitTest && !cfg.skipSpacing) {
+      const hitTestFindings = await auditPageHitTest(page, route, { viewport: viewportEvidence }).catch(() => []);
+      rawFindings.push(...hitTestFindings);
+    }
+
+    if (!challenged) {
+      const accessibilityFindings = await auditPageAccessibility(page, route, { viewport: viewportEvidence }).catch(() => []);
+      rawFindings.push(...accessibilityFindings);
+      const stateFindings = await auditPageStates(page, route, { viewport: viewportEvidence }).catch(() => []);
+      rawFindings.push(...stateFindings);
+    }
+
+    if (!challenged && cfg.themeSweep) {
+      await page.emulateMedia({ colorScheme: 'dark' }).catch(() => {});
+      await page.evaluate(() => document.documentElement.classList.add('dark')).catch(() => {});
+      const darkAudit = await auditPageColors(page, route).catch(() => ({ rawFindings: [] }));
+      for (const df of darkAudit.rawFindings) {
+        df.kind = 'dark-mode-contrast';
+        df.evidence.theme = 'dark';
+        rawFindings.push(df);
+      }
+      await page.emulateMedia({ colorScheme: 'light' }).catch(() => {});
+      await page.evaluate(() => document.documentElement.classList.remove('dark')).catch(() => {});
+    }
+
+    let zoomShots: { zoom: number; screenshot: string }[] = [];
+    if (!challenged && !cfg.skipZoom) {
+      const z = await zoomPass(page, route, cfg, (label) => shoot(page, cfg.outDir, `${artifactSlug}${label}`), baseShot);
+      rawFindings.push(...z.raw);
+      zoomShots = z.shots;
+    }
+
+    let probedControls: number | undefined;
+    let skippedControls: number | undefined;
+    if (!challenged && !cfg.skipInteractionSweep) {
+      await autoFillFormInputs(page).catch(() => 0);
+      const sweep = await sweepControls(page, route, url, controls, cfg, () => gate.pace(url));
+      rawFindings.push(...sweep.findings);
+      probedControls = sweep.probed;
+      skippedControls = sweep.skipped;
+    }
+
+    for (const finding of rawFindings) {
+      finding.evidence.viewport = viewportEvidence;
+      if (finding.evidence.selector && !finding.evidence.source) {
+        const src = await resolveSourceForSelector(page, finding.evidence.selector).catch(() => undefined);
+        if (src) finding.evidence.source = src;
+      }
+      if (cfg.captureCrops && !finding.evidence.cropBase64) {
+        const b = finding.evidence.layout?.box || finding.evidence.hitTest?.bounds;
+        if (b && b.w > 0 && b.h > 0) {
+          const pad = 20;
+          const clip = {
+            x: Math.max(0, b.x - pad),
+            y: Math.max(0, b.y - pad),
+            width: Math.min(viewport.width, b.w + pad * 2),
+            height: Math.min(viewport.height, b.h + pad * 2),
+          };
+          const buffer = await page.screenshot({ clip }).catch(() => null);
+          if (buffer) {
+            finding.evidence.cropBase64 = `data:image/png;base64,${buffer.toString('base64')}`;
+          }
+        }
+      }
+    }
+
+    const pageReport: PageReport = {
+      route,
+      template: toRouteTemplate(route),
+      viewport: viewportEvidence,
+      status: load.status,
+      loadError: load.loadError,
+      challenged: challenged || undefined,
+      screenshot: baseShot,
+      zoomShots,
+      consoleErrors: challenged ? [] : collectors.consoleErrors,
+      failedRequests: dedupedFailed,
+      ...(cfg.networkInventory ? { apiCalls, apiCallsOverflow } : {}),
+      controlCount: controls.length,
+      probedControls,
+      skippedControls,
+      textDigest,
+      textLength,
+      palette,
+    };
+
+    return {
+      taskIndex: index,
+      page: pageReport,
+      rawFindings,
+    };
+  } catch (err) {
+    rawFindings.push({
+      route,
+      kind: 'page-load-error',
+      evidence: {
+        url,
+        viewport: viewportEvidence,
+        consoleText: [err instanceof Error ? err.message : String(err)],
+      },
+    });
+    return {
+      taskIndex: index,
+      page: {
+        route,
+        template: toRouteTemplate(route),
+        viewport: viewportEvidence,
+        status: null,
+        consoleErrors: [err instanceof Error ? err.message : String(err)],
+        failedRequests: [],
+        controlCount: 0,
+      },
+      rawFindings,
+    };
+  } finally {
+    await page.close().catch(() => {});
+    await context.close().catch(() => {});
+  }
+}
+
 export async function crawl(config: CrawlConfig): Promise<CrawlResult> {
   const cfg = resolveConfig(config);
   const startedAt = new Date().toISOString();
@@ -194,250 +475,48 @@ export async function crawl(config: CrawlConfig): Promise<CrawlResult> {
       routes = planSeedList(cfg.routes, cfg.maxPages);
     }
 
-    const totalVisits = cfg.viewports.length * routes.length;
-    let visitIndex = 0;
-
+    const tasks: VisitTask[] = [];
+    let taskIdx = 0;
     for (const viewport of cfg.viewports) {
-      const viewportEvidence = { width: viewport.width, height: viewport.height, label: viewport.label };
-      const viewportSuffix = cfg.viewports.length > 1 ? `--${slug(viewport.label ?? `${viewport.width}x${viewport.height}`)}` : '';
-
       for (const route of routes) {
-      visitIndex++;
-      const vpLabel = viewport.label ?? `${viewport.width}x${viewport.height}`;
-      const progressMsg = `[ui-crawl] [${visitIndex}/${totalVisits}] ${route} (${vpLabel})...`;
-      process.stderr.write(progressMsg + '\n');
-      cfg.onProgress?.({ phase: 'page-start', route, pageIndex: visitIndex, totalPages: totalVisits, message: progressMsg });
+        tasks.push({ index: ++taskIdx, route, viewport });
+      }
+    }
+    const totalVisits = tasks.length;
 
-      // One page per route, closed at the end of it. This is what bounds memory: a page
-      // reused for a whole crawl accumulates everything the click sweep does to it, and
-      // peak RSS grew to 857MB over 25 routes. With a page per route it stays ~371MB.
-      const page = await newPage(session);
-      await page.setViewportSize({ width: viewport.width, height: viewport.height }).catch(() => {});
-      const url = cfg.baseUrl + route;
-      const routeFindingStart = rawFindings.length;
+    const workerCount = Math.min(cfg.concurrency, tasks.length);
+    let taskCursor = 0;
+    let completedCount = 0;
+    const visitResults: VisitResult[] = [];
 
-      if (!(await gate.allowed(url))) {
-        // Not crawled, and not a defect: the site asked us not to look. Recording it
-        // beats skipping silently, which would read as a clean page in the report.
-        rawFindings.push({ route, kind: 'robots-blocked', evidence: { url, viewport: viewportEvidence } });
-        pages.push({
-          route,
-          template: toRouteTemplate(route),
-          viewport: viewportEvidence,
-          status: null,
-          consoleErrors: [],
-          failedRequests: [],
-          controlCount: 0,
+    async function worker(): Promise<void> {
+      while (true) {
+        const task = tasks[taskCursor++];
+        if (!task) break;
+
+        const res = await executeVisit(session.browser, cfg, gate, task, totalVisits);
+        visitResults.push(res);
+
+        completedCount++;
+        const doneMsg = `[ui-crawl] [${completedCount}/${totalVisits}] ${task.route} done (${res.rawFindings.length} findings)`;
+        process.stderr.write(doneMsg + '\n');
+        cfg.onProgress?.({
+          phase: 'page-done',
+          route: task.route,
+          pageIndex: completedCount,
+          totalPages: totalVisits,
+          message: doneMsg,
         });
-        await page.close().catch(() => {});
-        continue;
       }
+    }
 
-      const collectors = attachCollectors(page, cfg.origin);
-      const load = await gotoRoute(page, url, cfg.navTimeoutMs, {
-        attempts: cfg.navRetries,
-        beforeAttempt: () => gate.pace(url),
-        onRetry: () => collectors.reset(),
-      });
-      const artifactSlug = `${slug(route)}${viewportSuffix}`;
-      const baseShot = await shoot(page, cfg.outDir, artifactSlug);
+    await Promise.all(Array.from({ length: workerCount }, () => worker()));
 
-      // Bot-challenge interstitial: app never rendered — swap the load finding and skip audits.
-      let challenged = false;
-      try {
-        const title = await page.title();
-        const bodyTextSample = await page
-          .evaluate(() => (document.body?.innerText || '').replace(/\s+/g, ' ').slice(0, 2000))
-          .catch(() => '');
-        const mainRespHeaders: Record<string, string> = {};
-        // Cheap header proxy: challenge detection also uses title/body; cf-mitigated
-        // is best-effort from performance entries when available.
-        challenged = isChallengePage({
-          status: load.status,
-          url,
-          title,
-          bodyTextSample,
-          headers: mainRespHeaders,
-        });
-      } catch {
-        challenged = false;
-      }
-
-      let controls: Awaited<ReturnType<typeof enumerateControls>> = [];
-      if (!challenged) {
-        controls = await enumerateControls(page).catch(() => []);
-        // Observe is opt-in and a Noop text port short-circuits (no snapshot cost).
-        if (cfg.observeControls && !(cfg.text instanceof NoopTextTriagePort)) {
-          const extras = await observeExtraControls(page, cfg.text);
-          if (extras.length) controls = [...controls, ...extras];
-        }
-      }
-
-      let apiCalls: ApiCall[] | undefined;
-      let apiCallsOverflow: number | undefined;
-      if (cfg.networkInventory) {
-        const all = collectors.apiCalls;
-        apiCallsOverflow = Math.max(0, all.length - API_CALL_CAP);
-        apiCalls = all.slice(0, API_CALL_CAP);
-      }
-      collectors.dispose();
-
-      if (challenged) {
-        rawFindings.push({
-          route,
-          kind: 'bot-challenge',
-          evidence: { url, screenshot: baseShot },
-        });
-        // Severity refine at triage via status in evidence — encode status in consoleText for title path.
-        rawFindings[rawFindings.length - 1].evidence.consoleText = [
-          `HTTP ${load.status ?? 'challenge'}${challengeSeverity(load.status) === 'high' ? ' (hard block)' : ''}`,
-        ];
-      } else {
-        if (load.status && load.status >= 400) {
-          rawFindings.push({ route, kind: 'page-load-error', evidence: { url, screenshot: baseShot } });
-        }
-        if (load.loadError) {
-          rawFindings.push({ route, kind: 'page-load-error', evidence: { url, screenshot: baseShot, consoleText: [load.loadError] } });
-        }
-        for (const ce of collectors.consoleErrors) {
-          rawFindings.push({ route, kind: 'console-error', evidence: { url, screenshot: baseShot, consoleText: [ce] } });
-        }
-        const dedupedFailed = dedupeRequests(collectors.failedRequests);
-        for (const fr of dedupedFailed) {
-          if (fr.url === url) continue; // Root document load failure is already captured as page-load-error
-          rawFindings.push({
-            route,
-            kind: 'broken-asset',
-            evidence: {
-              url: fr.url,
-              consoleText: [fr.status ? `HTTP ${fr.status}` : (fr.failure ?? 'Failed')],
-            },
-          });
-        }
-      }
-      const dedupedFailed = challenged ? [] : dedupeRequests(collectors.failedRequests);
-
-      let palette: ColorPalette | undefined;
-      let textDigest: number | undefined;
-      let textLength: number | undefined;
-      if (!challenged && !cfg.skipContrast) {
-        const colorAudit = await auditPageColors(page, route).catch(() => ({ rawFindings: [], palette: undefined, textDigest: undefined, textLength: undefined }));
-        rawFindings.push(...colorAudit.rawFindings);
-        palette = colorAudit.palette;
-        textDigest = colorAudit.textDigest;
-        textLength = colorAudit.textLength;
-      }
-
-      if (!challenged && !cfg.skipSpacing) {
-        const spacingFindings = await auditPageSpacing(page, route).catch(() => []);
-        rawFindings.push(...spacingFindings);
-      }
-
-      if (!challenged && !cfg.skipLayout) {
-        const layoutFindings = await auditPageLayout(page, route, { viewport: viewportEvidence }).catch(() => []);
-        rawFindings.push(...layoutFindings);
-        const tabFindings = await auditTabPanels(page, route).catch(() => []);
-        rawFindings.push(...tabFindings);
-      }
-
-      if (!challenged && !cfg.skipAffordance) {
-        const affordanceFindings = await auditPageAffordance(page, route, controls).catch(() => []);
-        rawFindings.push(...affordanceFindings);
-      }
-
-      if (!challenged && !cfg.skipHitTest && !cfg.skipSpacing) {
-        const hitTestFindings = await auditPageHitTest(page, route, { viewport: viewportEvidence }).catch(() => []);
-        rawFindings.push(...hitTestFindings);
-      }
-
-      if (!challenged) {
-        const accessibilityFindings = await auditPageAccessibility(page, route, { viewport: viewportEvidence }).catch(() => []);
-        rawFindings.push(...accessibilityFindings);
-        const stateFindings = await auditPageStates(page, route, { viewport: viewportEvidence }).catch(() => []);
-        rawFindings.push(...stateFindings);
-      }
-
-      if (!challenged && cfg.themeSweep) {
-        await page.emulateMedia({ colorScheme: 'dark' }).catch(() => {});
-        await page.evaluate(() => document.documentElement.classList.add('dark')).catch(() => {});
-        const darkAudit = await auditPageColors(page, route).catch(() => ({ rawFindings: [] }));
-        for (const df of darkAudit.rawFindings) {
-          df.kind = 'dark-mode-contrast';
-          df.evidence.theme = 'dark';
-          rawFindings.push(df);
-        }
-        await page.emulateMedia({ colorScheme: 'light' }).catch(() => {});
-        await page.evaluate(() => document.documentElement.classList.remove('dark')).catch(() => {});
-      }
-
-      let zoomShots: { zoom: number; screenshot: string }[] = [];
-      if (!challenged && !cfg.skipZoom) {
-        const z = await zoomPass(page, route, cfg, (label) => shoot(page, cfg.outDir, `${artifactSlug}${label}`), baseShot);
-        rawFindings.push(...z.raw);
-        zoomShots = z.shots;
-      }
-
-      let probedControls: number | undefined;
-      let skippedControls: number | undefined;
-      if (!challenged && !cfg.skipInteractionSweep) {
-        await autoFillFormInputs(page).catch(() => 0);
-        const sweep = await sweepControls(page, route, url, controls, cfg, () => gate.pace(url));
-        rawFindings.push(...sweep.findings);
-        probedControls = sweep.probed;
-        skippedControls = sweep.skipped;
-      }
-
-      for (const finding of rawFindings.slice(routeFindingStart)) {
-        finding.evidence.viewport = viewportEvidence;
-        if (finding.evidence.selector && !finding.evidence.source) {
-          const src = await resolveSourceForSelector(page, finding.evidence.selector).catch(() => undefined);
-          if (src) finding.evidence.source = src;
-        }
-        if (cfg.captureCrops && !finding.evidence.cropBase64) {
-          const b = finding.evidence.layout?.box || finding.evidence.hitTest?.bounds;
-          if (b && b.w > 0 && b.h > 0) {
-            const pad = 20;
-            const clip = {
-              x: Math.max(0, b.x - pad),
-              y: Math.max(0, b.y - pad),
-              width: Math.min(viewport.width, b.w + pad * 2),
-              height: Math.min(viewport.height, b.h + pad * 2),
-            };
-            const buffer = await page.screenshot({ clip }).catch(() => null);
-            if (buffer) {
-              finding.evidence.cropBase64 = `data:image/png;base64,${buffer.toString('base64')}`;
-            }
-          }
-        }
-      }
-
-      pages.push({
-        route,
-        template: toRouteTemplate(route),
-        viewport: viewportEvidence,
-        status: load.status,
-        loadError: load.loadError,
-        challenged: challenged || undefined,
-        screenshot: baseShot,
-        zoomShots,
-        consoleErrors: challenged ? [] : collectors.consoleErrors,
-        failedRequests: dedupedFailed,
-        ...(cfg.networkInventory ? { apiCalls, apiCallsOverflow } : {}),
-        controlCount: controls.length,
-        probedControls,
-        skippedControls,
-        textDigest,
-        textLength,
-        palette,
-      });
-
-      const pageFindingsCount = rawFindings.length - routeFindingStart;
-      const doneMsg = `[ui-crawl] [${visitIndex}/${totalVisits}] ${route} done (${pageFindingsCount} findings)`;
-      process.stderr.write(doneMsg + '\n');
-      cfg.onProgress?.({ phase: 'page-done', route, pageIndex: visitIndex, totalPages: totalVisits, message: doneMsg });
-
-      await page.close().catch(() => {});
-      }
+    // Deterministic sort: preserve initial route and viewport order
+    visitResults.sort((a, b) => a.taskIndex - b.taskIndex);
+    for (const r of visitResults) {
+      pages.push(r.page);
+      rawFindings.push(...r.rawFindings);
     }
   } finally {
     await closeSession(session);

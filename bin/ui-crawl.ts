@@ -23,22 +23,31 @@ function parseFlags(args: string[]): { opts: Record<string, string | boolean>; p
   const positional: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
-    if (!a.startsWith('--')) {
-      positional.push(a);
-      continue;
-    }
-    const body = a.slice(2);
-    if (body.includes('=')) {
-      const [k, v] = body.split(/=(.*)/s);
-      opts[k] = v;
-      continue;
-    }
-    const next = args[i + 1];
-    if (next && !next.startsWith('--')) {
-      opts[body] = next;
-      i++;
+    if (a.startsWith('--')) {
+      const body = a.slice(2);
+      if (body.includes('=')) {
+        const [k, v] = body.split(/=(.*)/s);
+        opts[k] = v;
+        continue;
+      }
+      const next = args[i + 1];
+      if (next && !next.startsWith('-')) {
+        opts[body] = next;
+        i++;
+      } else {
+        opts[body] = true;
+      }
+    } else if (a.startsWith('-') && a.length === 2) {
+      const k = a.slice(1);
+      const next = args[i + 1];
+      if (next && !next.startsWith('-')) {
+        opts[k] = next;
+        i++;
+      } else {
+        opts[k] = true;
+      }
     } else {
-      opts[body] = true;
+      positional.push(a);
     }
   }
   return { opts, positional };
@@ -203,6 +212,7 @@ async function main(): Promise<void> {
   if (opts.crops) config.captureCrops = true;
   if (opts.browser) config.browser = String(opts.browser) as 'chromium' | 'webkit' | 'firefox';
   if (opts.quick) config.quick = true;
+  if (opts.concurrency || opts.c) config.concurrency = Number(opts.concurrency || opts.c);
 
   // Differential Re-run Defects
   if (opts['rerun-defects']) {

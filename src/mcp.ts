@@ -54,6 +54,7 @@ export const MCP_TOOLS = [
         captureCrops: { type: 'boolean', description: 'Capture base64 visual micro-crops for defects' },
         dbPath: { type: 'string', description: 'SQLite database path (default: .ui-crawl.db)' },
         diff: { type: 'boolean', description: 'Compute differential against previous run' },
+        concurrency: { type: 'number', description: 'Number of concurrent visit workers (default: 4)' },
         full: {
           type: 'boolean',
           description: 'Return full raw crawl result instead of concise agent action plan',
@@ -186,6 +187,7 @@ export async function handleMcpMessage(request: JsonRpcRequest): Promise<JsonRpc
           skipZoom: args.skipZoom === true,
           themeSweep: args.themeSweep === true,
           captureCrops: args.captureCrops === true,
+          concurrency: typeof args.concurrency === 'number' ? args.concurrency : undefined,
           dbPath: typeof args.dbPath === 'string' ? args.dbPath : undefined,
           diff: typeof args.diff === 'boolean' || typeof args.diff === 'string' ? args.diff : undefined,
         };

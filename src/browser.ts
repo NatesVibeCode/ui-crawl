@@ -16,7 +16,7 @@ export interface Session {
  * downloads refused, and top-level navigations to a different origin aborted (so an
  * external link or a logout-to-SSO can't carry the crawl off-site).
  */
-async function buildContext(
+export async function buildContext(
   browser: Browser,
   cfg: ResolvedConfig,
   viewport: { width: number; height: number },
@@ -80,13 +80,17 @@ async function buildContext(
   return { context, userAgent };
 }
 
+export async function launchBrowser(cfg: ResolvedConfig): Promise<Browser> {
+  const engine = cfg.browser ?? 'chromium';
+  const launcher = engine === 'webkit' ? webkit : engine === 'firefox' ? firefox : chromium;
+  return launcher.launch({ headless: cfg.headless });
+}
+
 export async function openSession(
   cfg: ResolvedConfig,
   viewport: { width: number; height: number },
 ): Promise<Session> {
-  const engine = cfg.browser ?? 'chromium';
-  const launcher = engine === 'webkit' ? webkit : engine === 'firefox' ? firefox : chromium;
-  const browser = await launcher.launch({ headless: cfg.headless });
+  const browser = await launchBrowser(cfg);
   const { context, userAgent } = await buildContext(browser, cfg, viewport);
   return { browser, context, userAgent };
 }

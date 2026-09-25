@@ -1,3 +1,4 @@
+import * as os from 'node:os';
 import { NoopVisionPort, NoopTextTriagePort, type VisionPort, type TextTriagePort } from './ports.js';
 import type { ReportSink } from './sink.js';
 
@@ -94,6 +95,8 @@ export interface CrawlConfig {
   browser?: 'chromium' | 'webkit' | 'firefox';
   /** Fast visual sweep mode (skips button clicking sweeps and zoom reflow loops). Default false. */
   quick?: boolean;
+  /** Number of concurrent page visit workers. Default 4 (or available parallelism). */
+  concurrency?: number;
   /** Progress callback invoked during crawl execution. */
   onProgress?: (event: { phase: string; route?: string; pageIndex?: number; totalPages?: number; message?: string }) => void;
 }
@@ -134,6 +137,7 @@ export interface ResolvedConfig {
   captureCrops: boolean;
   browser: 'chromium' | 'webkit' | 'firefox';
   quick: boolean;
+  concurrency: number;
   onProgress?: (event: { phase: string; route?: string; pageIndex?: number; totalPages?: number; message?: string }) => void;
 }
 
@@ -239,6 +243,9 @@ export function resolveConfig(c: CrawlConfig): ResolvedConfig {
     captureCrops: c.captureCrops ?? false,
     browser: c.browser ?? 'chromium',
     quick: c.quick ?? false,
+    concurrency: c.concurrency !== undefined
+      ? Math.max(1, Math.floor(c.concurrency))
+      : Math.min(4, Math.max(1, typeof os.availableParallelism === 'function' ? os.availableParallelism() : 4)),
     onProgress: c.onProgress,
   };
 }

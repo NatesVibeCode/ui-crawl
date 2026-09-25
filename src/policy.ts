@@ -51,6 +51,7 @@ export class PolitenessGate {
   private robots = new Map<string, RobotsRules>();
   private robotsText = new Map<string, string | null>();
   private lastNav = new Map<string, number>();
+  private navQueue = new Map<string, Promise<void>>();
 
   constructor(
     private readonly request: APIRequestContext,
@@ -116,8 +117,13 @@ export class PolitenessGate {
     }
     if (isLoopbackHost(parsed.hostname)) return;
     const origin = parsed.origin;
-    const wait = this.minIntervalMs - (Date.now() - (this.lastNav.get(origin) ?? 0));
-    if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
-    this.lastNav.set(origin, Date.now());
+    const prev = this.navQueue.get(origin) ?? Promise.resolve();
+    const next = prev.then(async () => {
+      const wait = this.minIntervalMs - (Date.now() - (this.lastNav.get(origin) ?? 0));
+      if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+      this.lastNav.set(origin, Date.now());
+    });
+    this.navQueue.set(origin, next.catch(() => {}));
+    await next;
   }
 }

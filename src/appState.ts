@@ -110,7 +110,7 @@ export async function auditOpenModal(
   // 2. Audit contrast and hit test inside modal
   const [colors, hitTest] = await Promise.all([
     auditPageColors(page, route).catch(() => ({ rawFindings: [] })),
-    auditPageHitTest(page, route).catch(() => []),
+    auditPageHitTest(page, route, { containerSelector: sel }).catch(() => []),
   ]);
 
   findings.push(...colors.rawFindings);

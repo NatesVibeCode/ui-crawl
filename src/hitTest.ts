@@ -4,6 +4,7 @@ import { SELECTOR } from './selectors.js';
 
 export interface HitTestOptions {
   viewport?: { width: number; height: number; label?: string };
+  containerSelector?: string;
 }
 
 export function isTouchTargetSmall(w: number, h: number, min = 23.5): boolean {
@@ -35,41 +36,49 @@ export async function auditPageHitTest(
   options: HitTestOptions = {},
 ): Promise<RawFinding[]> {
   const rawResults = await page
-    .evaluate((selector) => {
-      const results: RawHitTestResult[] = [];
-      const elements = Array.from(document.querySelectorAll(selector));
+    .evaluate(
+      ({ selector, containerSelector }) => {
+        const results: RawHitTestResult[] = [];
+        const root = containerSelector ? document.querySelector(containerSelector) : document;
+        if (!root) return [];
+        const elements = Array.from(root.querySelectorAll(selector));
 
-      const isVisible = (el: Element): boolean => {
-        const rect = el.getBoundingClientRect();
-        const style = window.getComputedStyle(el);
-        return (
-          rect.width > 0 &&
-          rect.height > 0 &&
-          style.display !== 'none' &&
-          style.visibility !== 'hidden' &&
-          parseFloat(style.opacity || '1') > 0.05
-        );
-      };
+        const openModal = !containerSelector
+          ? document.querySelector('dialog[open], [role="dialog"]:not([aria-hidden="true"])')
+          : null;
 
-      const getSelector = (el: Element): string => {
-        if (el.id) return `#${el.id}`;
-        const tid = el.getAttribute('data-testid');
-        if (tid) return `[data-testid="${tid}"]`;
-        const tag = el.tagName.toLowerCase();
-        const parent = el.parentElement;
-        if (!parent) return tag;
-        let nth = 1;
-        let sib = el.previousElementSibling;
-        while (sib) {
-          if (sib.tagName === el.tagName) nth++;
-          sib = sib.previousElementSibling;
-        }
-        return `${tag}:nth-of-type(${nth})`;
-      };
+        const isVisible = (el: Element): boolean => {
+          const rect = el.getBoundingClientRect();
+          const style = window.getComputedStyle(el);
+          return (
+            rect.width > 0 &&
+            rect.height > 0 &&
+            style.display !== 'none' &&
+            style.visibility !== 'hidden' &&
+            parseFloat(style.opacity || '1') > 0.05
+          );
+        };
 
-      for (let i = 0; i < elements.length; i++) {
-        const el = elements[i];
-        if (!isVisible(el)) continue;
+        const getSelector = (el: Element): string => {
+          if (el.id) return `#${el.id}`;
+          const tid = el.getAttribute('data-testid');
+          if (tid) return `[data-testid="${tid}"]`;
+          const tag = el.tagName.toLowerCase();
+          const parent = el.parentElement;
+          if (!parent) return tag;
+          let nth = 1;
+          let sib = el.previousElementSibling;
+          while (sib) {
+            if (sib.tagName === el.tagName) nth++;
+            sib = sib.previousElementSibling;
+          }
+          return `${tag}:nth-of-type(${nth})`;
+        };
+
+        for (let i = 0; i < elements.length; i++) {
+          const el = elements[i];
+          if (openModal && !openModal.contains(el)) continue;
+          if (!isVisible(el)) continue;
 
         const rect = el.getBoundingClientRect();
         const style = window.getComputedStyle(el);
@@ -127,7 +136,7 @@ export async function auditPageHitTest(
       }
 
       return results;
-    }, SELECTOR)
+    }, { selector: SELECTOR, containerSelector: options.containerSelector })
     .catch(() => []);
 
   return rawResults.map((r) => ({

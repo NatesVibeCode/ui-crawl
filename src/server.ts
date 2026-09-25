@@ -536,6 +536,7 @@ export async function startUiServer(options: UiServerOptions = {}): Promise<UiSe
           themeSweep?: boolean;
           crops?: boolean;
           defectsOnly?: boolean;
+          concurrency?: number;
         }>(req);
 
         let staticServer: StaticServer | undefined;
@@ -557,6 +558,7 @@ export async function startUiServer(options: UiServerOptions = {}): Promise<UiSe
           quick: body.quick ?? true,
           themeSweep: body.themeSweep ?? false,
           captureCrops: body.crops ?? true,
+          concurrency: body.concurrency,
           dbPath,
           onProgress: (evt) => {
             broadcastEvent('progress', evt);

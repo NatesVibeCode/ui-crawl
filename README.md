@@ -48,6 +48,11 @@ node bin/ui-crawl.js --base-url http://localhost:3000 --routes /
 # Audit a static build output directory (auto-discovers all HTML routes)
 node bin/ui-crawl.js --dir ./dist
 
+# High-throughput parallel audit across 4 concurrent workers (default: 4)
+node bin/ui-crawl.js --dir ./dist --concurrency 4
+# or short flag:
+node bin/ui-crawl.js --dir ./dist -c 8
+
 # Fast visual sweep with WebKit (Safari) and only output mechanical defects
 node bin/ui-crawl.js --dir ./dist --quick --browser webkit --defects-only
 
