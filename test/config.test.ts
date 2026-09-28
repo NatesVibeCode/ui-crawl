@@ -33,15 +33,9 @@ describe('resolveConfig', () => {
     expect(c.zoomLevels).toEqual([1, 1.5, 2]);
     expect(c.interactionTimeoutMs).toBe(1500);
     expect(c.headless).toBe(true);
-    expect(c.observeControls).toBe(false);
     expect(c.guidance).toBe(true);
     expect(c.networkInventory).toBe(true);
     expect(c.userAgent).toBeUndefined();
-  });
-
-  it('honors observeControls when explicitly enabled', () => {
-    const c = resolveConfig({ baseUrl: 'http://x', observeControls: true });
-    expect(c.observeControls).toBe(true);
   });
 
   it('honors guidance / networkInventory / userAgent overrides', () => {
@@ -69,5 +63,31 @@ describe('resolveConfig', () => {
     expect(c.maxPages).toBe(3);
     expect(c.skipZoom).toBe(true);
     expect(c.headless).toBe(false);
+  });
+});
+
+describe('viewport label collisions', () => {
+  it('appends dimensions when two viewports share a label, so screenshots never overwrite', async () => {
+    const { resolveConfig } = await import('../src/config.js');
+    const c = resolveConfig({
+      baseUrl: 'http://x',
+      viewports: [
+        { width: 1280, height: 800, label: 'main' },
+        { width: 390, height: 844, label: 'main' },
+      ],
+    });
+    expect(c.viewports.map((v) => v.label)).toEqual(['main-1280x800', 'main-390x844']);
+  });
+
+  it('leaves unique labels untouched', async () => {
+    const { resolveConfig } = await import('../src/config.js');
+    const c = resolveConfig({
+      baseUrl: 'http://x',
+      viewports: [
+        { width: 1280, height: 800, label: 'desktop' },
+        { width: 390, height: 844, label: 'mobile' },
+      ],
+    });
+    expect(c.viewports.map((v) => v.label)).toEqual(['desktop', 'mobile']);
   });
 });

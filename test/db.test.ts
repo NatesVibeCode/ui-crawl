@@ -138,3 +138,151 @@ describe('SQLite run tracking & differential engine', () => {
     expect(diff?.regressions[0].evidence.selector).toBe('.header-title');
   });
 });
+
+describe('computeFingerprint stability', () => {
+  it('identifies a control by content, not by its position in the page', async () => {
+    const { computeFingerprint } = await import('../src/db.js');
+    const before = computeFingerprint({
+      route: '/index.html',
+      type: 'broken-link',
+      selector: 'a:nth(4) "Dead link"',
+      evidence: { accessibleName: 'Dead link', url: 'http://x/gone?x=1' },
+    });
+    // One insertion above renumbers every control below it; the identity must not move.
+    const after = computeFingerprint({
+      route: '/index.html',
+      type: 'broken-link',
+      selector: 'a:nth(5) "Dead link"',
+      evidence: { accessibleName: 'Dead link', url: 'http://x/gone?x=1' },
+    });
+    expect(after).toBe(before);
+  });
+
+  it('still distinguishes same-named controls with different destinations', async () => {
+    const { computeFingerprint } = await import('../src/db.js');
+    const a = computeFingerprint({
+      route: '/', type: 'dead-button', selector: 'button:nth(1) "Go"',
+      evidence: { accessibleName: 'Go', url: 'http://x/a' },
+    });
+    const b = computeFingerprint({
+      route: '/', type: 'dead-button', selector: 'button:nth(2) "Go"',
+      evidence: { accessibleName: 'Go', url: 'http://x/b' },
+    });
+    expect(a).not.toBe(b);
+  });
+
+  it('keeps selector identity for stable (non-positional) selectors', async () => {
+    const { computeFingerprint } = await import('../src/db.js');
+    expect(
+      computeFingerprint({ route: '/', type: 'low-contrast', selector: 'p#faint' }),
+    ).toBe('/::low-contrast::p#faint');
+  });
+
+  it('falls back to the selector when a positional finding names nothing', async () => {
+    const { computeFingerprint } = await import('../src/db.js');
+    expect(
+      computeFingerprint({ route: '/', type: 'missing-image-alt', selector: 'img:nth(0)' }),
+    ).toBe('/::missing-image-alt::img:nth(0)');
+  });
+});
+
+describe('computeFingerprint loopback normalization', () => {
+  it('ignores ephemeral static-server ports on loopback', async () => {
+    const { computeFingerprint } = await import('../src/db.js');
+    const a = computeFingerprint({
+      route: '/index.html', type: 'broken-link', selector: 'a:nth(4) "Dead link"',
+      evidence: { accessibleName: 'Dead link', url: 'http://127.0.0.1:51234/gone?x=1' },
+    });
+    const b = computeFingerprint({
+      route: '/index.html', type: 'broken-link', selector: 'a:nth(5) "Dead link"',
+      evidence: { accessibleName: 'Dead link', url: 'http://127.0.0.1:52341/gone?x=1' },
+    });
+    expect(b).toBe(a);
+  });
+
+  it('keeps real hosts exact, port included', async () => {
+    const { computeFingerprint } = await import('../src/db.js');
+    const a = computeFingerprint({
+      route: '/', type: 'broken-link', selector: 'a:nth(0) "x"',
+      evidence: { accessibleName: 'x', url: 'https://cdn.example.com:8443/a' },
+    });
+    const b = computeFingerprint({
+      route: '/', type: 'broken-link', selector: 'a:nth(0) "x"',
+      evidence: { accessibleName: 'x', url: 'https://cdn.example.com:9443/a' },
+    });
+    expect(a).not.toBe(b);
+  });
+});
+
+describe('getDiff unknown runs', () => {
+  it('returns null for a run id that names nothing, instead of reporting a clean sweep', async () => {
+    const { openDatabase, saveRun, getDiff } = await import('../src/db.js');
+    const db = openDatabase(':memory:');
+    const runId = saveRun(db, {
+      baseUrl: 'http://localhost:3000',
+      startedAt: '2026-06-21T00:00:00.000Z',
+      finishedAt: '2026-06-21T00:01:00.000Z',
+      pages: [{ route: '/', template: '/', status: 200, consoleErrors: [], failedRequests: [], controlCount: 1 }],
+      findings: [
+        { route: '/', type: 'dead-button', bucket: 'defect', severity: 'high', title: 'x', evidence: {} },
+      ],
+    });
+    expect(getDiff(db, 'no-such-run')).toBeNull();
+    expect(getDiff(db, runId, 'no-such-baseline')).toBeNull();
+    // A lone run has nothing to compare against — also null, not an empty diff.
+    expect(getDiff(db, runId)).toBeNull();
+  });
+});
+
+describe('schema migration', () => {
+  it('adds the artifact/tag columns to a pre-existing database without losing data', async () => {
+    const { createRequire } = await import('node:module');
+    const { mkdtempSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { openDatabase, getRunHistory, getRunResult } = await import('../src/db.js');
+
+    const dir = mkdtempSync(join(tmpdir(), 'uic-mig-'));
+    const file = join(dir, 'old.db');
+    try {
+      // Exactly the pre-migration schema, with one run and one finding already in it.
+      const require = createRequire(import.meta.url);
+      const { DatabaseSync } = require('node:sqlite');
+      const old = new DatabaseSync(file);
+      old.exec(`
+        CREATE TABLE runs (id TEXT PRIMARY KEY, started_at TEXT NOT NULL, finished_at TEXT NOT NULL,
+          base_url TEXT NOT NULL, routes_json TEXT NOT NULL, verdict TEXT NOT NULL,
+          defects_count INTEGER NOT NULL, taste_count INTEGER NOT NULL, pages_count INTEGER NOT NULL,
+          summary_json TEXT NOT NULL);
+        CREATE TABLE findings (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, route TEXT NOT NULL,
+          type TEXT NOT NULL, bucket TEXT NOT NULL, severity TEXT NOT NULL, selector TEXT,
+          title TEXT NOT NULL, remediation TEXT, fingerprint TEXT NOT NULL, source_file TEXT,
+          source_line INTEGER, source_component TEXT, evidence_json TEXT NOT NULL);
+      `);
+      old.prepare('INSERT INTO runs VALUES (?,?,?,?,?,?,?,?,?,?)').run(
+        'run_old', '2026-01-01', '2026-01-01', 'http://x', '["/"]', 'has_defects', 1, 0, 1, '{}');
+      old.prepare('INSERT INTO findings VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(
+        'f1', 'run_old', '/', 'dead-button', 'defect', 'high', 'button#x', 'Dead', null,
+        '/::dead-button::button#x', null, null, null, '{}');
+      old.close();
+
+      // Opening with the new code must add the columns and keep the old rows.
+      const db = openDatabase(file);
+      const runCols = (db.prepare('PRAGMA table_info(runs)').all() as Array<{ name: string }>).map((r) => r.name);
+      const findCols = (db.prepare('PRAGMA table_info(findings)').all() as Array<{ name: string }>).map((r) => r.name);
+      expect(runCols).toContain('pages_json');
+      expect(findCols).toContain('help_url');
+      expect(findCols).toContain('tags_json');
+      expect(getRunHistory(db)).toHaveLength(1);
+      expect(getRunResult(db, 'run_old')?.findings).toHaveLength(1);
+
+      // Idempotent: opening again must not throw or duplicate anything.
+      db.close();
+      const again = openDatabase(file);
+      expect(getRunHistory(again)).toHaveLength(1);
+      again.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

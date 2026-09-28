@@ -26,6 +26,11 @@ export async function buildContext(
     viewport,
     storageState: cfg.storageState,
     acceptDownloads: false,
+    // Deterministic pixels: looping video/GIFs and CSS animations otherwise make two
+    // screenshots of the same page differ for no reason, and mutation counts jitter.
+    // This respects the page's own `prefers-reduced-motion` handling rather than ripping
+    // animations out of the DOM, so affordance and layout audits still see the real styles.
+    reducedMotion: 'reduce',
     ...(userAgent ? { userAgent } : {}),
   });
   context.setDefaultNavigationTimeout(cfg.navTimeoutMs);

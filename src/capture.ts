@@ -50,6 +50,10 @@ export async function gotoRoute(
         continue;
       }
       await page.waitForTimeout(300); // let client-side render settle
+      // Webfonts swap late: a screenshot taken during FOUT shows fallback glyphs, and
+      // contrast is measured on fallback metrics instead of the real ones. Wait for the
+      // font list to settle, but bounded — a hung font host must never stall a crawl.
+      await settleFonts(page, 1500);
       return { status };
     } catch (e) {
       last = { status: null, loadError: (e as Error).message };
@@ -59,6 +63,26 @@ export async function gotoRoute(
     }
   }
   return last;
+}
+
+/**
+ * Wait for webfonts to finish loading, bounded by `maxMs`.
+ *
+ * Screenshots and contrast ratios are only meaningful against final pixels. `domcontentloaded`
+ * fires before `@font-face` fetches complete, so without this the audit photographs fallback
+ * glyphs and measures fallback metrics. The bound keeps a hung font host from stalling the run.
+ */
+export async function settleFonts(page: Page, maxMs = 1500): Promise<void> {
+  await page
+    .evaluate(
+      (ms: number) =>
+        Promise.race([
+          document.fonts ? document.fonts.ready.then(() => true) : Promise.resolve(true),
+          new Promise((resolve) => setTimeout(() => resolve(false), ms)),
+        ]),
+      maxMs,
+    )
+    .catch(() => {});
 }
 
 export interface Collectors {

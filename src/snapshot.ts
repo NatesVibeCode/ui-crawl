@@ -25,24 +25,146 @@ export interface SnapshotEntry {
 export const SNAPSHOT_CAP = 80;
 
 /**
+ * Pure: render one entry exactly as it appears in the numbered list, so full snapshots
+ * and change deltas spell controls the same way and an index always means one thing.
+ */
+export function formatSnapshotEntry(e: SnapshotEntry): string {
+  const parts = [`[${e.index}]`, e.tag];
+  if (e.role) parts.push(`role=${e.role}`);
+  if (e.name) parts.push(JSON.stringify(e.name));
+  if (e.disabled) parts.push('disabled');
+  if (!e.visible) parts.push('hidden');
+  if (e.href) parts.push(`-> ${e.href}`);
+  if (e.inSelector) parts.push('(covered)');
+  return parts.join(' ');
+}
+
+/**
  * Pure: render entries as a token-cheap numbered list.
  * Prefer out-of-selector visible controls; keep a little covered context.
  */
 export function formatSnapshot(entries: SnapshotEntry[], cap = SNAPSHOT_CAP): string {
   if (!entries.length) return '(no interactive elements)';
   const shown = entries.slice(0, cap);
-  const lines = shown.map((e) => {
-    const parts = [`[${e.index}]`, e.tag];
-    if (e.role) parts.push(`role=${e.role}`);
-    if (e.name) parts.push(JSON.stringify(e.name));
-    if (e.disabled) parts.push('disabled');
-    if (!e.visible) parts.push('hidden');
-    if (e.href) parts.push(`-> ${e.href}`);
-    if (e.inSelector) parts.push('(covered)');
-    return parts.join(' ');
-  });
+  const lines = shown.map((e) => formatSnapshotEntry(e));
   if (entries.length > cap) lines.push(`… ${entries.length - cap} more not shown`);
   return lines.join('\n');
+}
+
+export interface MarkResult {
+  /** How many badges were placed. */
+  count: number;
+  /** Remove every badge. Always call this — a marked page is a means, never a state. */
+  cleanup: () => Promise<void>;
+}
+
+/**
+ * Set-of-marks overlay: number every visible interactive control directly on the render,
+ * so a vision model can ground the `[n]` indices in the snapshot text to pixels.
+ *
+ * The badge number IS the element's position in the SNAPSHOT_SELECTOR match list — the
+ * same key `buildSnapshot` assigns — so text and image agree by construction as long as
+ * the DOM did not change between them. Badges are `position: fixed` with
+ * `pointer-events: none`: they never reflow the page and never intercept input. Only
+ * on-viewport controls are badged; below-fold entries stay text-only.
+ *
+ * The overlay exists only for the screenshot taken inside `take`: inject, shoot, remove.
+ * Callers must not leave a marked page behind — crops, audits, and verdicts all run on
+ * the clean DOM.
+ */
+export async function markControls(page: Page, cap = SNAPSHOT_CAP): Promise<MarkResult> {
+  const count = (await page
+    .evaluate(
+      (args: { selector: string; cap: number }) => {
+        const old = document.querySelector('[data-uicrawl-marks]');
+        if (old) old.remove();
+        const els = document.querySelectorAll(args.selector);
+        const host = document.createElement('div');
+        host.setAttribute('data-uicrawl-marks', 'true');
+        host.setAttribute('aria-hidden', 'true');
+        host.style.cssText =
+          'position:fixed;inset:0;z-index:2147483647;pointer-events:none;margin:0;padding:0;';
+        const vpW = window.innerWidth;
+        const vpH = window.innerHeight;
+        let placed = 0;
+        for (let i = 0; i < els.length && placed < args.cap; i++) {
+          const el = els[i];
+          const r = el.getBoundingClientRect();
+          if (r.width <= 0 || r.height <= 0) continue;
+          if (r.bottom < 0 || r.right < 0 || r.top > vpH || r.left > vpW) continue;
+          const badge = document.createElement('div');
+          badge.textContent = String(i);
+          const x = Math.max(10, Math.min(r.left, vpW - 10));
+          const y = Math.max(10, Math.min(r.top, vpH - 10));
+          badge.style.cssText =
+            'position:absolute;' +
+            `left:${x}px;top:${y}px;` +
+            'transform:translate(-30%,-50%);' +
+            'min-width:18px;height:18px;padding:0 4px;' +
+            'display:flex;align-items:center;justify-content:center;' +
+            'background:#7c3aed;color:#fff;' +
+            'font:600 11px/1 ui-monospace,monospace;' +
+            'border-radius:9px;box-shadow:0 0 0 1px #fff,0 1px 4px rgba(0,0,0,.4);';
+          host.appendChild(badge);
+          placed++;
+        }
+        document.documentElement.appendChild(host);
+        return placed;
+      },
+      { selector: SNAPSHOT_SELECTOR, cap },
+    )
+    .catch(() => 0)) as number;
+
+  return {
+    count,
+    cleanup: () =>
+      page
+        .evaluate(() => {
+          document.querySelector('[data-uicrawl-marks]')?.remove();
+        })
+        .catch(() => {}),
+  };
+}
+
+/**
+ * Pure: what changed between two snapshots, for long navigation loops where re-sending
+ * eighty unchanged lines per step is pure token burn.
+ *
+ * Indices are positional, so same-index comparison is meaningful while the DOM is
+ * stable; when it mutates, indices shift and the delta degrades to "many changed" —
+ * still correct, just verbose. Removed controls are reported with their last-known
+ * index marked gone (they cannot be addressed), and the total is always stated so a
+ * caller can tell "nothing changed" from "nothing listed".
+ */
+export function diffSnapshots(before: SnapshotEntry[], after: SnapshotEntry[]): string {
+  const prev = new Map(before.map((e) => [e.index, e]));
+  const lines: string[] = [];
+  let changed = 0;
+  for (const e of after) {
+    const old = prev.get(e.index);
+    if (!old) {
+      lines.push(`+ ${formatSnapshotEntry(e)}`);
+      changed++;
+    } else if (
+      old.tag !== e.tag ||
+      old.role !== e.role ||
+      old.name !== e.name ||
+      old.disabled !== e.disabled ||
+      old.visible !== e.visible ||
+      old.href !== e.href ||
+      old.inSelector !== e.inSelector
+    ) {
+      lines.push(`~ ${formatSnapshotEntry(e)}`);
+      changed++;
+    }
+    prev.delete(e.index);
+  }
+  for (const gone of [...prev.values()].sort((a, b) => a.index - b.index)) {
+    lines.push(`- [${gone.index}] ${gone.tag} ${JSON.stringify(gone.name)} (gone)`);
+    changed++;
+  }
+  const header = `${after.length} controls, ${changed} changed since last snapshot`;
+  return changed ? `${header}\n${lines.join('\n')}` : `${header} (no changes)`;
 }
 
 /**

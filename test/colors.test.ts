@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { parseColor, compositeColors, relativeLuminance, contrastRatio } from '../src/colors.js';
+import {
+  parseColor, compositeColors, relativeLuminance, contrastRatio, suggestAccessibleColor,
+} from '../src/colors.js';
 
 describe('colors: parseColor', () => {
   it('parses 3-digit and 6-digit hex colors', () => {
@@ -77,5 +79,58 @@ describe('colors: relativeLuminance & contrastRatio', () => {
     const ratio = contrastRatio(gray, white);
     expect(ratio).toBeGreaterThanOrEqual(4.5);
     expect(ratio).toBeLessThan(4.6);
+  });
+});
+
+describe('colors: suggestAccessibleColor', () => {
+  it('returns a concrete replacement hex that actually clears the bar', () => {
+    const s = suggestAccessibleColor('#b4b4b4', '#fafafa', 4.5);
+    expect(s).not.toBeNull();
+    // The reported ratio must be the ratio the emitted hex produces, not a prediction.
+    expect(contrastRatio(parseColor(s!.hex)!, parseColor('#fafafa')!)).toBeGreaterThanOrEqual(4.5);
+    expect(s!.ratio).toBeGreaterThanOrEqual(4.5);
+    expect(s!.direction).toBe('darken');
+  });
+
+  it('makes the smallest move that clears the threshold', () => {
+    const justUnder = suggestAccessibleColor('#767676', '#ffffff', 4.5);
+    // #767676 is the canonical 4.54:1 grey, so it should already pass and be left alone.
+    expect(justUnder).toBeNull();
+  });
+
+  it('lightens against a dark background', () => {
+    const s = suggestAccessibleColor('#333333', '#111111', 4.5);
+    expect(s).not.toBeNull();
+    expect(s!.direction).toBe('lighten');
+    expect(contrastRatio(parseColor(s!.hex)!, parseColor('#111111')!)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it('picks the workable direction for a mid-tone background', () => {
+    // Lightening #808080 on #808080 can only reach ~3.9:1; darkening reaches ~5.3:1.
+    // A "light background, so darken the text" heuristic would not help here, and neither
+    // would the opposite one — the suggestion has to search both.
+    const s = suggestAccessibleColor('#808080', '#808080', 4.5);
+    expect(s).not.toBeNull();
+    expect(contrastRatio(parseColor(s!.hex)!, parseColor('#808080')!)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it('returns null when the foreground already passes', () => {
+    expect(suggestAccessibleColor('#000000', '#ffffff', 4.5)).toBeNull();
+  });
+
+  it('returns null on an unparseable colour rather than inventing one', () => {
+    expect(suggestAccessibleColor('not-a-color', '#ffffff', 4.5)).toBeNull();
+    expect(suggestAccessibleColor('#000000', 'not-a-color', 4.5)).toBeNull();
+  });
+
+  it('honours the large-text 3.0 threshold', () => {
+    // #a0a0a0 on white is ~2.6:1 — fails both bars, so each threshold gets its own answer.
+    const s = suggestAccessibleColor('#a0a0a0', '#ffffff', 3.0);
+    expect(s).not.toBeNull();
+    expect(contrastRatio(parseColor(s!.hex)!, parseColor('#ffffff')!)).toBeGreaterThanOrEqual(3.0);
+
+    const stricter = suggestAccessibleColor('#a0a0a0', '#ffffff', 4.5);
+    expect(stricter).not.toBeNull();
+    expect(contrastRatio(parseColor(stricter!.hex)!, parseColor('#ffffff')!)).toBeGreaterThanOrEqual(4.5);
   });
 });

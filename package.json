@@ -1,8 +1,8 @@
 {
   "name": "@aidev/ui-crawl",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "Standalone Playwright UI-crawl harness: drives a running dev server and sorts findings into mechanical defects vs taste questions. Imports zero application code; only contract is a base URL.",
+  "description": "Agent-native UI inspection instrument. Crawls a web app for visual, layout, contrast, accessibility, and interaction defects, and exposes a live browser session so an LLM harness can navigate and look. Emits JSON, indexed DOM snapshots, screenshots with source locations, and exact CSS remediations.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -16,6 +16,10 @@
   "bin": {
     "ui-crawl": "./bin/ui-crawl.js"
   },
+  "files": [
+    "bin",
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "prepack": "npm run build",

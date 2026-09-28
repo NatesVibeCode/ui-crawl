@@ -107,11 +107,27 @@ export interface Control {
   locator?: { css: string };
   /** Structural HTML landmark container where the control resides. */
   landmark?: 'header' | 'nav' | 'main' | 'footer' | 'aside' | 'section' | 'dialog' | 'other';
+  /**
+   * Position in the SNAPSHOT_SELECTOR match list on the pristine render — the same key
+   * the snapshot text and the set-of-marks badges use. A finding carrying this names the
+   * badge a marked screenshot shows for it. Computed at enumeration because insertions
+   * shift every position below them, so it cannot be re-derived after the sweep.
+   */
+  snapshotIndex?: number;
+  /**
+   * Viewport-relative box measured once during enumeration, on the pristine render.
+   *
+   * The sweep navigates and mutates the page as it goes, so a control's box cannot be
+   * re-measured when its finding is finally written — by then the document may be a
+   * different page entirely. Carrying the box from enumeration is what lets every
+   * interaction finding carry a vision crop.
+   */
+  box?: Box;
 }
 
 export interface Evidence {
   screenshot?: string; // path relative to outDir
-  viewport?: { width: number; height: number; label?: string };
+  viewport?: { width: number; height: number; label?: string; deviceScaleFactor?: number };
   selector?: string;
   accessibleName?: string;
   consoleText?: string[];
@@ -126,6 +142,22 @@ export interface Evidence {
     fontSize: string;
     fontWeight: string;
     textSample?: string;
+    /**
+     * A concrete replacement foreground that clears the required ratio against `bg`,
+     * or absent when no hue-preserving shift of `fg` can. Present so an agent can paste
+     * a value instead of solving the contrast arithmetic itself.
+     */
+    suggestedFg?: string;
+    /** Measured ratio of `suggestedFg` against `bg`, not the predicted one. */
+    suggestedRatio?: number;
+    /**
+     * Whether the suggestion was applied in the live DOM and re-measured there. True
+     * means the fix provably clears the bar on this page; false (with `note` in the
+     * remediation) usually means a stylesheet `!important` overrides it.
+     */
+    verified?: boolean;
+    /** Ratio measured with the fix applied in-page. */
+    verifiedRatio?: number;
     /**
      * Offsets of `textSample` in the page's normalized visible text (the same text the
      * page-level `textDigest` hashes), so a re-crawl can verify the quote still sits
@@ -181,6 +213,18 @@ export interface Evidence {
   remediation?: string;
   source?: SourceLocation;
   cropBase64?: string;
+  /**
+   * PNG file path relative to `outDir` holding the same pixels as `cropBase64`, when the
+   * run wrote crops to disk. A harness with filesystem access should read this instead
+   * of paying to move the base64 blob through its context.
+   */
+  crop?: string;
+  /**
+   * Position in the SNAPSHOT_SELECTOR match list — the `[n]` a snapshot prints and the
+   * badge a marked screenshot shows. Present when the finding's element is a snapshot
+   * control, so a vision caller joins badge to action without guessing.
+   */
+  snapshotIndex?: number;
   theme?: 'light' | 'dark';
   hitTest?: {
     interceptedBy?: string;
@@ -233,8 +277,10 @@ export interface Finding {
   source?: SourceLocation;
   /** Actionable remediation hint (CSS rule, property fix, or markup advice). */
   remediation?: string;
-  /** Present only when an injected model refined this finding (v2). */
-  triage?: { by: 'text' | 'vision'; verdict: string; mode: 'model' | 'skipped' };
+  /** Filtering vocabulary: wcag2aa, wcag22aa, best-practice, usability, reliability, internal. */
+  tags?: string[];
+  /** Stable reference grounding the rule (a WCAG Understanding URL where one exists). */
+  helpUrl?: string;
 }
 
 export interface ColorPalette {
@@ -257,12 +303,31 @@ export interface PageReport {
   route: string;
   template: string;
   /** Viewport used for this page render. One PageReport is emitted per configured viewport. */
-  viewport?: { width: number; height: number; label?: string };
+  viewport?: { width: number; height: number; label?: string; deviceScaleFactor?: number };
   status: number | null;
   loadError?: string;
   /** Main document looked like a bot-challenge interstitial; audits were skipped. */
   challenged?: boolean;
+  /**
+   * Viewport-sized render of the audited page — the size a vision model can actually read.
+   * Relative to `outDir`.
+   */
   screenshot?: string;
+  /**
+   * Whole-document render, present only when the document is taller than the viewport. A
+   * tall full-page image downscaled to model input is illegible, so the viewport shot is
+   * the default view and this is the map. Relative to `outDir`.
+   */
+  screenshotFull?: string;
+  /** Viewport render under emulated dark mode, present only with `themeSweep`. */
+  darkScreenshot?: string;
+  /**
+   * Viewport render with numbered set-of-marks badges over every visible control, present
+   * only with `captureCrops`. Badge `n` is snapshot index `n`, so a vision model grounds
+   * the text list to pixels. The clean `screenshot` is always captured too — markers
+   * occlude, so neither render substitutes for the other.
+   */
+  screenshotMarked?: string;
   zoomShots?: { zoom: number; screenshot: string }[];
   consoleErrors: string[];
   failedRequests: { url: string; status?: number; failure?: string }[];
@@ -300,6 +365,8 @@ export interface CrawlResult {
   finishedAt: string;
   pages: PageReport[];
   findings: Finding[];
+  /** Findings dropped by the per-page cap. Absent or zero means the report is complete. */
+  truncated?: number;
   diff?: DiffResult;
   /** Site guidance (robots/sitemap/llms) when fetched — a map for review agents. */
   guidance?: GuidanceSummary;
@@ -308,7 +375,7 @@ export interface CrawlResult {
   reportPath?: string;
 }
 
-/** Compact guidance for findings.json / gallery (raw files live under guidance/). */
+/** Compact guidance for findings.json (raw files live under guidance/). */
 export interface GuidanceSummary {
   fetchedAt: string;
   robots?: { status: number; allow: string[]; disallow: string[] };

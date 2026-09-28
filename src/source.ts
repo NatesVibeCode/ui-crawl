@@ -1,5 +1,6 @@
 import type { Page } from 'playwright';
 import type { SourceLocation } from './types.js';
+import { resolveEvidence } from './locate.js';
 
 /**
  * In-browser extractor: inspects React Fiber internals, Vue vnodes, Svelte metadata,
@@ -98,82 +99,16 @@ export function extractElementSource(el: Element): SourceLocation | undefined {
 }
 
 /**
- * Resolves component source information for a given CSS selector in a Playwright Page.
+ * Resolves component source information for a selector emitted by a detector.
+ *
+ * Delegates to the shared resolver so this understands the tool's own selector grammar
+ * (`button:nth(3) "Save"`, composite ` , ` joins) and not just plain CSS — the reason
+ * interaction findings used to come back with no source location at all. It also means one
+ * page round-trip can serve both the source location and the evidence crop for one element.
  */
 export async function resolveSourceForSelector(
   page: Page,
   selector: string,
 ): Promise<SourceLocation | undefined> {
-  try {
-    return await page.evaluate((sel: string) => {
-      const el = document.querySelector(sel);
-      if (!el) return undefined;
-
-      const anyEl = el as unknown as Record<string, unknown>;
-      let file: string | undefined;
-      let line: number | undefined;
-      let column: number | undefined;
-      let component: string | undefined;
-      const hierarchy: string[] = [];
-
-      const attrFile = el.getAttribute('data-source-file') || el.getAttribute('data-file') || undefined;
-      const attrLine = el.getAttribute('data-source-line') || el.getAttribute('data-line') || undefined;
-      const attrComp = el.getAttribute('data-component') || el.getAttribute('data-testid') || undefined;
-
-      if (attrFile) {
-        file = attrFile;
-        line = attrLine ? parseInt(attrLine, 10) : undefined;
-      }
-      if (attrComp) component = attrComp;
-
-      const fiberKey = Object.keys(anyEl).find(
-        (k) => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'),
-      );
-      if (fiberKey) {
-        let curr: Record<string, unknown> | null = anyEl[fiberKey] as Record<string, unknown> | null;
-        const HTML_TAGS = new Set([
-          'div', 'span', 'p', 'button', 'a', 'section', 'main', 'header',
-          'footer', 'ul', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'nav',
-        ]);
-        while (curr) {
-          const type = (curr.type || curr.elementType) as Record<string, unknown> | string | undefined;
-          let compName: string | undefined;
-          if (typeof type === 'function' || (typeof type === 'object' && type !== null)) {
-            compName = (type as { displayName?: string; name?: string }).displayName || (type as { name?: string }).name;
-          }
-          if (compName) {
-            if (!component) component = compName;
-            hierarchy.push(compName);
-          }
-          const debugSource = curr._debugSource as { fileName?: string; lineNumber?: number; columnNumber?: number } | undefined;
-          if (debugSource && !file) {
-            file = debugSource.fileName;
-            line = debugSource.lineNumber;
-            column = debugSource.columnNumber;
-          }
-          curr = curr.return as Record<string, unknown> | null;
-        }
-      }
-
-      const vnode = (anyEl.__vnode || anyEl._vnode) as Record<string, unknown> | undefined;
-      if (vnode?.type) {
-        const vtype = vnode.type as Record<string, unknown>;
-        const vComp = (vtype.__name || vtype.name) as string | undefined;
-        const vFile = vtype.__file as string | undefined;
-        if (vComp && !component) component = vComp;
-        if (vFile && !file) file = vFile;
-      }
-
-      const svelteMeta = anyEl.__svelte_meta as { loc?: { file?: string; line?: number } } | undefined;
-      if (svelteMeta?.loc) {
-        if (svelteMeta.loc.file && !file) file = svelteMeta.loc.file;
-        if (svelteMeta.loc.line && !line) line = svelteMeta.loc.line;
-      }
-
-      if (!file && !component && !hierarchy.length) return undefined;
-      return { file, line, column, component, hierarchy: hierarchy.length ? hierarchy : undefined };
-    }, selector);
-  } catch {
-    return undefined;
-  }
+  return (await resolveEvidence(page, selector)).source;
 }

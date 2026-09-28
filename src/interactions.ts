@@ -1,10 +1,10 @@
 import type { Page, Route, Locator } from 'playwright';
-import type { Control, Signals, RawFinding } from './types.js';
+import type { Control, Signals, RawFinding, Evidence } from './types.js';
 import type { ResolvedConfig } from './config.js';
 import { classifyChange, MUTATION_FLOOR } from './changeDetect.js';
 import { findRedundant } from './redundancy.js';
 import { relocateControl } from './snapshot.js';
-import { SELECTOR } from './selectors.js';
+import { SELECTOR, SNAPSHOT_SELECTOR } from './selectors.js';
 import { detectOpenModal, auditOpenModal, dismissOpenModal } from './appState.js';
 
 export { SELECTOR };
@@ -41,9 +41,18 @@ export async function enumerateControls(page: Page): Promise<Control[]> {
   // NOTE: keep this callback free of NAMED inner functions. tsx/esbuild rewrites named
   // functions to reference a `__name` helper that does not exist in Playwright's isolated
   // world, which makes the whole $$eval throw. Inline everything with anonymous arrows.
-  const raw = await page.$$eval(SELECTOR, (els) => {
-    const here = new URL(document.baseURI);
-    return els.map((el, index) => {
+  // NOTE: a single page.evaluate with an object argument, not $$eval with a trailing
+  // selector argument — the latter's overloads resolve differently under the typecheck
+  // config (bundler) and the build config (NodeNext), and the build one rejects it.
+  const raw = await page.evaluate(
+    (args: { selector: string; snapshotSelector: string }) => {
+      const els = Array.from(document.querySelectorAll(args.selector));
+      const here = new URL(document.baseURI);
+      // Snapshot-pool positions, so a control's finding can name the badge a marked
+      // screenshot shows for it. Computed here, on the pristine render: after the sweep
+      // clicks things, insertions shift every position below them.
+      const snapshotPool = Array.from(document.querySelectorAll(args.snapshotSelector));
+      return els.map((el, index) => {
       const tag = el.tagName.toLowerCase();
       const role = el.getAttribute('role') || undefined;
       const disabled = el.hasAttribute('disabled') || el.getAttribute('aria-disabled') === 'true';
@@ -101,9 +110,11 @@ export async function enumerateControls(page: Page): Promise<Control[]> {
         }
       }
 
-      return { index, tag, role, accessibleName, disabled, visible, navTarget, formAction, destructive: false, landmark };
-    });
-  });
+      return { index, tag, role, accessibleName, disabled, visible, navTarget, formAction, destructive: false, landmark, snapshotIndex: snapshotPool.indexOf(el), box: { selector: `${tag}:nth(${index})`, x: rect.x, y: rect.y, w: rect.width, h: rect.height } };
+      });
+    },
+    { selector: SELECTOR, snapshotSelector: SNAPSHOT_SELECTOR },
+  );
   for (const c of raw) c.destructive = isDestructiveLabel(c.accessibleName);
   return raw as Control[];
 }
@@ -129,7 +140,7 @@ const POLL_MS = 40;
  * The residual risk is a delayed signal landing after the window; the classifier's
  * stated bias covers it — that degrades to a taste question, never a false defect.
  */
-async function observeClick(
+export async function observeClick(
   page: Page,
   cfg: ResolvedConfig,
   urlBefore: string,
@@ -378,16 +389,40 @@ function pick(c: Control): RawFinding['control'] {
   return { accessibleName: c.accessibleName, tag: c.tag, navTarget: c.navTarget, formAction: c.formAction };
 }
 
+/**
+ * The box this control occupied on the pristine render, or undefined when the element had
+ * no area. Attached at finding-write time because the sweep may already have navigated;
+ * see `Control.box`.
+ */
+function boxOf(c: Control): Pick<Evidence, 'layout'> | undefined {
+  return c.box && c.box.w > 0 && c.box.h > 0 ? { layout: { box: c.box } } : undefined;
+}
+
+/** Evidence common to every probe outcome, carrying the pre-sweep box forward. */
+function baseEvidence(c: Control, signals: Signals, extra: Partial<Evidence> = {}): Evidence {
+  const withBox = boxOf(c);
+  return {
+    accessibleName: c.accessibleName,
+    selector: describe(c),
+    signals,
+    ...(withBox?.layout?.box ? { layout: withBox.layout } : {}),
+    // The badge this control wears in a marked screenshot. Carried, like the box,
+    // because positions shift once the sweep starts clicking.
+    ...(c.snapshotIndex !== undefined && c.snapshotIndex >= 0 ? { snapshotIndex: c.snapshotIndex } : {}),
+    ...extra,
+  };
+}
+
 /** Map a single probe to a raw finding (or null when the control acted). */
 export function rawFromVerdict(route: string, c: Control, signals: Signals): RawFinding | null {
   const verdict = classifyChange(signals);
   if (verdict === 'ACTED') return null;
   if (verdict === 'INCONCLUSIVE') {
-    return { route, kind: 'stale-selector', control: pick(c), evidence: { accessibleName: c.accessibleName, selector: describe(c), signals } };
+    return { route, kind: 'stale-selector', control: pick(c), evidence: baseEvidence(c, signals) };
   }
   // NOOP — the discriminating cases:
   if (signals.consoleErrors > 0) {
-    return { route, kind: 'button-threw', control: pick(c), evidence: { accessibleName: c.accessibleName, selector: describe(c), signals } };
+    return { route, kind: 'button-threw', control: pick(c), evidence: baseEvidence(c, signals) };
   }
   // A real LINK that went nowhere is clearly broken -> defect.
   if (c.navTarget) {
@@ -395,13 +430,13 @@ export function rawFromVerdict(route: string, c: Control, signals: Signals): Raw
       route,
       kind: 'broken-link',
       control: pick(c),
-      evidence: { accessibleName: c.accessibleName, selector: describe(c), url: c.navTarget, signals },
+      evidence: baseEvidence(c, signals, { url: c.navTarget }),
     };
   }
   // A form SUBMIT that did nothing is most often waiting on input — native validation blocks
   // an empty submit silently (no nav/network/DOM). That's not positive evidence of brokenness,
   // so it's a taste question ("dead, or needs prior input?"), never a verified defect.
-  return { route, kind: 'maybe-contextual-button', ambiguous: true, control: pick(c), evidence: { accessibleName: c.accessibleName, selector: describe(c), signals } };
+  return { route, kind: 'maybe-contextual-button', ambiguous: true, control: pick(c), evidence: baseEvidence(c, signals) };
 }
 
 export interface SweepResult {
@@ -467,6 +502,15 @@ export async function sweepControls(
         accessibleName: first.accessibleName,
         url: group.destination,
         selector: group.controls.map(describe).join(' , '),
+        // Every member's box, so a crop can be taken for each duplicate rather than only
+        // for whichever one the resolver happens to land on.
+        ...(group.controls.every((c) => c.box)
+          ? { boxes: group.controls.map((c) => c.box!) }
+          : {}),
+        // The first member's badge, so the group maps to the marked screenshot.
+        ...(first.snapshotIndex !== undefined && first.snapshotIndex >= 0
+          ? { snapshotIndex: first.snapshotIndex }
+          : {}),
       },
     });
   }

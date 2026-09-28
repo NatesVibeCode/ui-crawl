@@ -97,6 +97,280 @@ export function contrastRatio(c1: { r: number; g: number; b: number }, c2: { r: 
   return Math.round(ratio * 100) / 100;
 }
 
+export interface ColorSuggestion {
+  /** Replacement foreground that meets `requiredRatio` against the same background. */
+  hex: string;
+  /** Contrast ratio the suggestion actually achieves, as measured — not as predicted. */
+  ratio: number;
+  /** Whether the fix darkens or lightens the original foreground. */
+  direction: 'darken' | 'lighten';
+}
+
+function toHex(c: { r: number; g: number; b: number }): string {
+  const h = (n: number) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0');
+  return `#${h(c.r)}${h(c.g)}${h(c.b)}`;
+}
+
+/**
+ * The smallest hue-preserving change to `fgHex` that reaches `requiredRatio` against
+ * `bgHex`. Returns the suggestion, or null when no single-channel-preserving move works
+ * (in which case the remediation must ask for a different background, not a different ink).
+ *
+ * Scaling channels multiplicatively toward black, or toward white via `c + (255-c)*t`,
+ * keeps hue and relative saturation instead of washing the color out the way a straight
+ * RGB mix toward a grey pole would. Both directions are searched and the smaller move
+ * wins, because guessing the pole from background luminance alone picks wrong for
+ * mid-tone backgrounds: at `#808080`, lightening can only reach 3.9:1 while darkening
+ * reaches 5.3:1, so a "light background" heuristic would give up on a solvable problem.
+ */
+export function suggestAccessibleColor(
+  fgHex: string,
+  bgHex: string,
+  requiredRatio: number,
+): ColorSuggestion | null {
+  const fg = parseColor(fgHex);
+  const bg = parseColor(bgHex);
+  if (!fg || !bg) return null;
+
+  const bgOpaque = { r: bg.r, g: bg.g, b: bg.b };
+  if (contrastRatio(fg, bgOpaque) >= requiredRatio) return null;
+
+  const STEPS = 200;
+  let best: { c: { r: number; g: number; b: number }; t: number; direction: 'darken' | 'lighten' } | undefined;
+
+  for (const direction of ['darken', 'lighten'] as const) {
+    for (let i = 1; i <= STEPS; i++) {
+      const t = i / STEPS;
+      const c =
+        direction === 'darken'
+          ? { r: fg.r * (1 - t), g: fg.g * (1 - t), b: fg.b * (1 - t) }
+          : { r: fg.r + (255 - fg.r) * t, g: fg.g + (255 - fg.g) * t, b: fg.b + (255 - fg.b) * t };
+      if (contrastRatio(c, bgOpaque) >= requiredRatio) {
+        if (!best || t < best.t) best = { c, t, direction };
+        break;
+      }
+    }
+  }
+
+  if (!best) return null;
+  const rounded = {
+    r: Math.round(best.c.r),
+    g: Math.round(best.c.g),
+    b: Math.round(best.c.b),
+  };
+  // Re-measure the rounded value: the suggestion is what the agent will paste in, so the
+  // ratio we report must be the ratio that exact hex produces.
+  const ratio = contrastRatio(rounded, bgOpaque);
+  if (ratio < requiredRatio) return null;
+
+  return { hex: toHex(rounded), ratio, direction: best.direction };
+}
+
+export interface ContrastVerification {
+  selector: string;
+  /** The suggested color, applied and re-measured in the live DOM, clears the bar. */
+  verified: boolean;
+  /** Ratio measured with the fix applied, or null when the element could not be read. */
+  ratio: number | null;
+  /** Computed foreground with the fix applied — differs when the cascade overrides it. */
+  computedFg: string | null;
+  /** Why verification failed, when it did. */
+  note?: string;
+}
+
+/**
+ * Audit the remediation, not just the defect: apply each suggested color in the live DOM,
+ * re-measure, and restore.
+ *
+ * The Node-side suggestion is already re-measured mathematically, but math assumes the
+ * suggested hex is what paints. The cascade decides that, in two stages: a plain inline
+ * declaration first (which is also what the suggestion's ratio predicts), then inline
+ * `!important` when something heavier owns the text. Whatever still wins after that is
+ * paint-level — `-webkit-text-fill-color`, which ignores `color` entirely — or forced.
+ * Backgrounds are re-walked with the fix in place, since `currentColor` backgrounds move
+ * with the foreground. Every inline style is then put back.
+ */
+export async function verifyContrastFixes(
+  page: Page,
+  items: Array<{ selector: string; suggestedFg: string; requiredRatio: number }>,
+): Promise<ContrastVerification[]> {
+  if (!items.length) return [];
+  return (await page
+    .evaluate((list: Array<{ selector: string; suggestedFg: string; requiredRatio: number }>) => {
+      const parse = (str: string): { r: number; g: number; b: number; a: number } | null => {
+        if (!str) return null;
+        const s = str.trim().toLowerCase();
+        if (s.startsWith('#')) {
+          const hex = s.slice(1);
+          if (hex.length === 3 || hex.length === 6) {
+            const full = hex.length === 3 ? hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2] : hex;
+            return {
+              r: parseInt(full.slice(0, 2), 16),
+              g: parseInt(full.slice(2, 4), 16),
+              b: parseInt(full.slice(4, 6), 16),
+              a: 1,
+            };
+          }
+          return null;
+        }
+        const m = s.match(/^rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:[,\s/]+([\d.]+%?))?\s*\)$/);
+        if (m) {
+          let a = 1;
+          if (m[4] !== undefined) {
+            a = m[4].endsWith('%') ? parseFloat(m[4]) / 100 : parseFloat(m[4]);
+            a = Math.min(1, Math.max(0, a));
+          }
+          return {
+            r: Math.min(255, Math.max(0, Math.round(parseFloat(m[1])))),
+            g: Math.min(255, Math.max(0, Math.round(parseFloat(m[2])))),
+            b: Math.min(255, Math.max(0, Math.round(parseFloat(m[3])))),
+            a,
+          };
+        }
+        if (s === 'transparent') return { r: 0, g: 0, b: 0, a: 0 };
+        if (s === 'white') return { r: 255, g: 255, b: 255, a: 1 };
+        if (s === 'black') return { r: 0, g: 0, b: 0, a: 1 };
+        return null;
+      };
+
+      const blend = (
+        fg: { r: number; g: number; b: number; a: number },
+        bg: { r: number; g: number; b: number; a: number },
+      ): { r: number; g: number; b: number; a: number } => {
+        const a = fg.a + bg.a * (1 - fg.a);
+        if (a <= 0) return { r: 255, g: 255, b: 255, a: 0 };
+        return {
+          r: Math.round((fg.r * fg.a + bg.r * bg.a * (1 - fg.a)) / a),
+          g: Math.round((fg.g * fg.a + bg.g * bg.a * (1 - fg.a)) / a),
+          b: Math.round((fg.b * fg.a + bg.b * bg.a * (1 - fg.a)) / a),
+          a,
+        };
+      };
+
+      const lum = (c: { r: number; g: number; b: number }): number => {
+        const lin = (v: number): number => {
+          const s = v / 255;
+          return s <= 0.04045 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+        };
+        return 0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b);
+      };
+
+      const contrast = (
+        c1: { r: number; g: number; b: number },
+        c2: { r: number; g: number; b: number },
+      ): number => {
+        const higher = Math.max(lum(c1), lum(c2));
+        const lower = Math.min(lum(c1), lum(c2));
+        return Math.round(((higher + 0.05) / (lower + 0.05)) * 100) / 100;
+      };
+
+      const toHex = (c: { r: number; g: number; b: number }): string => {
+        const h = (n: number): string => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0');
+        return `#${h(c.r)}${h(c.g)}${h(c.b)}`;
+      };
+
+      const effectiveBg = (el: Element): { r: number; g: number; b: number; a: number } => {
+        let curr: Element | null = el;
+        const layers: Array<{ r: number; g: number; b: number; a: number }> = [];
+        while (curr && curr !== document.documentElement) {
+          const parsed = parse(window.getComputedStyle(curr).backgroundColor);
+          if (parsed && parsed.a > 0) {
+            layers.push(parsed);
+            if (parsed.a >= 1) break;
+          }
+          curr = curr.parentElement;
+        }
+        if (!layers.length || layers[layers.length - 1].a < 1) {
+          const rootParsed = parse(window.getComputedStyle(document.documentElement).backgroundColor);
+          if (rootParsed && rootParsed.a > 0) layers.push(rootParsed);
+          layers.push({ r: 255, g: 255, b: 255, a: 1 });
+        }
+        let res = layers[layers.length - 1];
+        for (let i = layers.length - 2; i >= 0; i--) res = blend(layers[i], res);
+        return res;
+      };
+
+      return list.map((item) => {
+        const el = document.querySelector(item.selector) as HTMLElement | null;
+        if (!el) {
+          return {
+            selector: item.selector,
+            verified: false,
+            ratio: null,
+            computedFg: null,
+            note: 'element not found for verification',
+          };
+        }
+        const style = (target: HTMLElement): CSSStyleDeclaration => window.getComputedStyle(target);
+        const hadInline = el.style.getPropertyValue('color');
+        const hadPriority = el.style.getPropertyPriority('color');
+        try {
+          // Stage 1: a plain declaration. If the computed color does not move, something
+          // with more cascade weight owns this text — find out what before forcing it.
+          el.style.setProperty('color', item.suggestedFg);
+          let painted = parse(style(el).color);
+          let neededImportant = false;
+          if (!painted || toHex(painted) !== item.suggestedFg.toLowerCase()) {
+            // Stage 2: inline !important beats every author rule, so whatever still wins
+            // is not a normal declaration — it is paint-level (text-fill) or forced.
+            el.style.setProperty('color', item.suggestedFg, 'important');
+            painted = parse(style(el).color);
+            neededImportant = true;
+          }
+          if (!painted) {
+            return {
+              selector: item.selector,
+              verified: false,
+              ratio: null,
+              computedFg: null,
+              note: 'computed color unreadable with the fix applied',
+            };
+          }
+          // -webkit-text-fill-color paints over `color` and ignores it entirely: the
+          // computed color can match the suggestion while the pixels never change.
+          const fillRaw = style(el).getPropertyValue('-webkit-text-fill-color');
+          const fill = fillRaw ? parse(fillRaw) : null;
+          const fillWins = !!fill && toHex(fill) !== toHex(painted);
+          const fg = fillWins ? fill! : painted;
+          if (toHex(fg) !== item.suggestedFg.toLowerCase()) {
+            return {
+              selector: item.selector,
+              verified: false,
+              ratio: contrast(fg, effectiveBg(el)),
+              computedFg: toHex(fg),
+              note: fillWins
+                ? 'text paints via -webkit-text-fill-color — set that property, not color'
+                : 'stylesheet still overrides the fix — edit the stylesheet rule instead of the inline color',
+            };
+          }
+          const ratio = contrast(fg, effectiveBg(el));
+          if (ratio < item.requiredRatio) {
+            return {
+              selector: item.selector,
+              verified: false,
+              ratio,
+              computedFg: toHex(fg),
+              note: 'applied fix still below the required ratio',
+            };
+          }
+          return {
+            selector: item.selector,
+            verified: true,
+            ratio,
+            computedFg: toHex(fg),
+            ...(neededImportant
+              ? { note: 'needs !important to beat the existing rule — a plain declaration will not move it' }
+              : {}),
+          };
+        } finally {
+          if (hadInline) el.style.setProperty('color', hadInline, hadPriority);
+          else el.style.removeProperty('color');
+        }
+      });
+    }, items)
+    .catch(() => [])) as ContrastVerification[];
+}
+
 export interface ContrastSample {
   selector: string;
   textSample: string;
@@ -367,9 +641,18 @@ export async function auditPageColors(
   };
 
   const rawFindings: RawFinding[] = [];
+  const pendingVerification: Array<{ finding: RawFinding; requiredRatio: number }> = [];
   for (const s of evalResult.samples) {
     if (!s.passes) {
-      rawFindings.push({
+      const suggestion = suggestAccessibleColor(s.fg, s.bg, s.requiredRatio);
+      // Naming the replacement hex is the whole point: "adjust the foreground" hands the
+      // agent the arithmetic this tool exists to do. When no hue-preserving move clears
+      // the bar, say so plainly instead of implying any fg tweak will work.
+      const remediation = suggestion
+        ? `Contrast is ${s.ratio}:1 (needs >= ${s.requiredRatio}:1). Set color to ${suggestion.hex} — same hue, ${suggestion.direction}ed, ${suggestion.ratio}:1 against ${s.bg}.`
+        : `Contrast is ${s.ratio}:1 (needs >= ${s.requiredRatio}:1). No ${s.fg} shade clears the bar against ${s.bg}; darken or lighten the background instead.`;
+
+      const finding: RawFinding = {
         route,
         kind: 'low-contrast',
         evidence: {
@@ -382,10 +665,46 @@ export async function auditPageColors(
             fontWeight: s.fontWeight,
             textSample: s.textSample,
             ...(s.textStart === null ? {} : { textStart: s.textStart, textEnd: s.textEnd ?? undefined }),
+            ...(suggestion ? { suggestedFg: suggestion.hex, suggestedRatio: suggestion.ratio } : {}),
           },
-          remediation: `Current contrast is ${s.ratio}:1 (expected >= ${s.requiredRatio}:1). Adjust foreground from ${s.fg} to meet contrast against background ${s.bg}.`,
+          remediation,
         },
-      });
+      };
+      rawFindings.push(finding);
+      if (suggestion && s.selector) {
+        pendingVerification.push({ finding, requiredRatio: s.requiredRatio });
+      }
+    }
+  }
+
+  // Audit the remediation, not just the defect: apply each suggestion in the live DOM and
+  // confirm the ratio really clears. A stylesheet `!important` is the classic way a
+  // correct suggestion does nothing — the finding then says which edit will work instead.
+  if (pendingVerification.length) {
+    const results = await verifyContrastFixes(
+      page,
+      pendingVerification.map(({ finding, requiredRatio }) => ({
+        selector: finding.evidence.selector!,
+        suggestedFg: finding.evidence.contrast!.suggestedFg!,
+        requiredRatio,
+      })),
+    ).catch(() => []);
+    const bySelector = new Map(results.map((r) => [r.selector, r]));
+    for (const { finding } of pendingVerification) {
+      const v = bySelector.get(finding.evidence.selector!);
+      if (!v) continue;
+      const c = finding.evidence.contrast!;
+      c.verified = v.verified;
+      if (v.ratio !== null) c.verifiedRatio = v.ratio;
+      if (v.verified) {
+        finding.evidence.remediation += ` Verified in-page (${v.ratio}:1 measured with the fix applied)`;
+        // A warning, not a failure: the value works, but only with cascade weight the
+        // agent must reproduce in its own edit.
+        if (v.note) finding.evidence.remediation += ` — ${v.note}.`;
+        else finding.evidence.remediation += '.';
+      } else if (v.note) {
+        finding.evidence.remediation += ` In-page check: ${v.note}.`;
+      }
     }
   }
 

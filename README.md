@@ -1,133 +1,140 @@
 # @aidev/ui-crawl
 
-An agent-native Playwright UI auditing harness that drives a running web app or static directory, detects mechanical visual and layout defects, and outputs machine-consumable JSON payloads, indexed DOM snapshots, framework source-locations, and actionable CSS remediations.
+An agent-native UI inspection instrument. It does two things, and only these two:
 
-It assumes **no human is in the loop**. All outputs are deterministic, structured JSON payloads, token-efficient indexed DOM snapshots, and actionable CSS/DOM remediation instructions.
+1. **Batch audit** — crawls many routes at once and reports visual, layout, contrast,
+   accessibility, and interaction defects with a `file:line` to edit and a screenshot of
+   the defect.
+2. **Live session** — opens a real browser that an agent drives one action at a time, so
+   it can look at a page, click one specific control, look again, and reason about the
+   difference.
 
----
-
-## Capabilities
-
-- **Zero-Dependency Native SQLite Engine**: Tracks crawl runs, defect trends, and run-over-run diffs (`--db`, `--diff`, `--history`).
-- **Differential Auditing (`--diff`, `--rerun-defects`)**: Instantly categorizes findings into `fixed` (verifies agent repairs), `regressions` (detects accidental breakage), and `persistent`. Re-audit only previously failed routes with `--rerun-defects`.
-- **Zero-Dependency Web Console & REST/SSE Server (`--ui [port]`)**: Launch an embedded real-time web dashboard and SSE progress stream for live monitoring and interactive inspection.
-- **Fast Visual Sweep Mode (`--quick`)**: High-speed visual/contrast/layout audit skipping heavy control clicks.
-- **Multi-Engine Browser Support (`--browser`)**: Run audits against Chromium, WebKit (Safari), or Firefox.
-- **Interactive App UI Auditing**: Detects open dialogs/modals, verifies focus traps and viewport fit, tests dismissibility and restores state, unrolls tab panels/steppers, and safely auto-fills benign form inputs.
-- **Container Escapes & Sibling Collisions**: Detects elements overflowing container bounds (`container-overflow`) and vertical in-flow collisions (`sibling-overlap`).
-- **Framework Source-to-DOM Grounding**: Inspects React Fiber (`_debugSource`), Vue (`__vnode`), Svelte (`__svelte_meta`), and data attributes, telling agents the exact `.tsx`/`.vue` file, line number, and component name.
-- **Pointer Physics & Hit-Testing**: Verifies `document.elementFromPoint` to catch ghost overlays, transparent interceptors (`pointer-intercepted`), and small touch targets (`small-touch-target`).
-- **Dual-Theme Dark Mode Sweep (`--theme-sweep`)**: Emulates dark mode to catch inverted contrast collapses and dark theme breakage.
-- **Multimodal Micro-Crops (`--crops`)**: Captures targeted $200\times200\text{px}$ base64 bounding-box PNG crops for visual/layout defects.
-- **Native Screenshot Utility (`--shot`)**: Fast full-page or selector-targeted PNG captures.
-- **DOM Layout Collision**: Detects in-flow sibling element overlaps, collision bounds, and container wrapping failures (`layout-overlap`).
-- **Typography Clash**: Detects descender/ascender ink collisions where line-height ratio is cramped (< 1.15) (`text-line-collision`).
-- **Clipped Text**: Identifies silent overflow truncation where `scrollWidth > clientWidth` (`clipped-text`).
-- **Viewport Blowout**: Catches horizontal layout blowout causing unwanted page scrollbars (`viewport-overflow`).
-- **WCAG Contrast**: High-precision luminance contrast checks with computed remediation recommendations (`low-contrast`).
-- **Interaction Probing**: Safe synthetic clicks on interactive controls verifying DOM mutations, network requests, and navigations (`dead-button`), ignoring off-screen skip links.
-- **LLM Semantic Snapshots**: High-density, token-efficient DOM snapshots with stable numbered indices for fast agent reasoning (`ui_snapshot`).
-- **Model Context Protocol (MCP)**: Native stdio JSON-RPC 2.0 server exposing `ui_audit`, `ui_diff`, `ui_history`, and `ui_snapshot` tools to coding agents.
+It assumes **no human is in the loop**. There are no visual galleries, no HTML reports, and
+no dashboards. Every output is either structured JSON on stdout, a file an agent can read,
+or an image an agent can look at.
 
 ---
 
 ## Quickstart
 
-### 1. Install & Build
 ```bash
 npm install
 npm run build
 ```
 
-### 2. Run Audit via CLI
-Stdout emits pure, parseable JSON (`AgentPayload`):
+### Batch audit
+
 ```bash
-# Audit a live dev server
+# A running dev server
 node bin/ui-crawl.js --base-url http://localhost:3000 --routes /
 
-# Audit a static build output directory (auto-discovers all HTML routes)
+# A static build (auto-discovers every HTML route)
 node bin/ui-crawl.js --dir ./dist
 
-# High-throughput parallel audit across 4 concurrent workers (default: 4)
-node bin/ui-crawl.js --dir ./dist --concurrency 4
-# or short flag:
-node bin/ui-crawl.js --dir ./dist -c 8
+# Parallel across 8 workers, with dark-mode sweep and per-finding crops
+node bin/ui-crawl.js --dir ./dist -c 8 --theme-sweep --crops
 
-# Fast visual sweep with WebKit (Safari) and only output mechanical defects
-node bin/ui-crawl.js --dir ./dist --quick --browser webkit --defects-only
+# WebKit, mechanical defects only, no clicks
+node bin/ui-crawl.js --dir ./dist --browser webkit --defects-only
 
-# Re-audit only the routes that failed on the last crawl
+# Re-audit just the routes that failed last run
 node bin/ui-crawl.js --dir ./dist --rerun-defects
-
-# Audit with dark-mode theme sweep and differential tracking against previous run
-node bin/ui-crawl.js --dir ./dist --theme-sweep --diff
 ```
 
-### 3. Launch Local Web Console & REST/SSE Dashboard
-```bash
-# Start embedded UI dashboard on http://127.0.0.1:49152
-node bin/ui-crawl.js --ui
+### Live session
 
-# Custom port
-node bin/ui-crawl.js --ui 8080
+```json
+[
+  { "type": "click", "index": 0 },
+  { "type": "resize", "width": 390, "height": 844 },
+  { "type": "theme", "scheme": "dark" },
+  { "type": "screenshot" }
+]
 ```
 
-### 4. Capture Screenshots or Page Snapshots
 ```bash
-# Fast full-page screenshot
-node bin/ui-crawl.js --shot preview.png --dir ./dist
+node bin/ui-crawl.js --session --steps steps.json --dir ./dist
+```
 
-# Screenshot specific element selector
-node bin/ui-crawl.js --shot modal.png --dir ./dist --selector "dialog#modal"
+Each step reports the `ACTED`/`NOOP` verdict, the signals behind it, the resulting URL, a
+fresh numbered snapshot, and a screenshot.
 
-# Compact numbered DOM snapshot for LLMs
+### Snapshots and shots
+
+```bash
 node bin/ui-crawl.js --snapshot --file ./index.html
-
-# Raw JSON snapshot array
 node bin/ui-crawl.js --snapshot --file ./index.html --json
+node bin/ui-crawl.js --shot preview.png --dir ./dist
+node bin/ui-crawl.js --shot modal.png --dir ./dist --selector "dialog#lead-modal"
 ```
 
-### 5. Query Differential & Run History
+### History and diffs
+
 ```bash
-# Show differential against the latest baseline run
-node bin/ui-crawl.js --diff
-
-# Query run history
 node bin/ui-crawl.js --history --limit 5
+node bin/ui-crawl.js --diff
 ```
 
-### 5. Run as MCP Server
+### MCP server
+
 ```bash
 node bin/ui-crawl.js --mcp
 ```
 
-Add to your agent or IDE config (e.g. `claude_desktop_config.json` or `.gemini`):
 ```json
 {
   "mcpServers": {
     "ui-crawl": {
       "command": "node",
-      "args": ["/Users/nate/Public Repos/ui-crawl/bin/ui-crawl.js", "--mcp"]
+      "args": ["/path/to/ui-crawl/bin/ui-crawl.js", "--mcp"]
     }
   }
 }
 ```
 
+| Tool | Purpose |
+|---|---|
+| `ui_audit` | Batch audit. Every CLI knob is exposed; the two surfaces do not diverge. Page renders and finding crops arrive as native `image` blocks after the JSON text. |
+| `ui_fix_plan` | **Start here after an audit.** Ordered work order — one step per root cause, worst first, each with the `file:line`, the concrete fix, and the picture. Returns `done` / `exitCriteria` so you know when to stop. Reads the last run without re-crawling. |
+| `ui_open` | Open a live browser session; returns a `sessionId`, a numbered snapshot, and a screenshot `image` block. |
+| `ui_act` | One action; returns the verdict, the signals, the new snapshot, and a screenshot `image` block. `snapshot: full\|changed\|none` controls list verbosity; `dialog: accept\|dismiss` decides native dialogs. |
+| `ui_close` | Release a session. |
+| `ui_login` | Replay a login flow; returns a `storageState` object for `ui_audit` / `ui_open`. COMMITS — dev targets only. |
+| `ui_snapshot` | Numbered control list, standalone or from a live session. |
+| `ui_selectors` | What this tool can and cannot see — the probe selector vs the snapshot selector. |
+| `ui_diff` | Fixed / persistent / regressions between two runs. |
+| `ui_history` | Past runs with verdicts and counts. |
+
+### Gated targets
+
+```bash
+# Save a login once, audit with it ever after
+node bin/ui-crawl.js --login login-steps.json --save-storage state.json \
+  --login-route /login --dir ./dist
+node bin/ui-crawl.js --dir ./dist --storage-state state.json
+
+# Or do both in one run (state stays in memory, never touches disk)
+node bin/ui-crawl.js --login login-steps.json --login-route /login --dir ./dist
+```
+
+A login replays real steps and really submits the form — unlike the audit sweep, which
+never commits a mutating request. Dev targets only.
+
 ---
 
-## Output Schema (`AgentPayload`)
+## Output
+
+stdout is pure data. Progress and diagnostics go to stderr.
 
 ```json
 {
   "runId": "run_1790285831742_a146e4",
   "verdict": "has_defects",
   "summary": {
-    "defects": 1,
-    "taste": 0,
-    "pagesCrawled": 1,
-    "byType": {
-      "layout-overlap": 1
-    }
+    "defects": 10,
+    "taste": 8,
+    "pagesCrawled": 4,
+    "byType": { "low-contrast": 2, "layout-overlap": 1 }
   },
   "actions": [
     {
@@ -140,53 +147,135 @@ Add to your agent or IDE config (e.g. `claude_desktop_config.json` or `.gemini`)
       "selector": ".card-index",
       "title": "In-flow elements collide",
       "remediation": "Add flex-wrap: wrap to container .card-header",
-      "source": {
-        "file": "src/components/CardHeader.tsx",
-        "line": 42,
-        "component": "CardHeader"
-      },
+      "source": { "file": "src/components/CardHeader.tsx", "line": 42, "component": "CardHeader" },
       "cropBase64": "data:image/png;base64,iVBORw0KGgo...",
-      "evidence": {
-        "layout": {
-          "otherSelector": ".research-badge",
-          "overlapFrac": 0.35
-        }
-      }
+      "evidence": { "layout": { "otherSelector": ".research-badge", "overlapFrac": 0.35 } }
     }
   ],
   "routes": ["/"],
-  "diff": {
-    "runA": "run_1790285828330_654b6a",
-    "runB": "run_1790285831742_a146e4",
-    "fixed": [
-      { "fingerprint": "/::low-contrast::p#faint", "title": "Low text contrast..." }
-    ],
-    "regressions": [],
-    "persistent": [
-      { "fingerprint": "/::layout-overlap::.card-index", "title": "In-flow elements collide" }
-    ]
-  }
+  "pages": [
+    {
+      "route": "/",
+      "screenshot": "screenshots/index_html.png",
+      "zoomShots": [
+        { "zoom": 1.5, "screenshot": "screenshots/index_html@150.png" },
+        { "zoom": 2, "screenshot": "screenshots/index_html@200.png" }
+      ],
+      "status": 200,
+      "controlCount": 9,
+      "probedControls": 8,
+      "skippedControls": 0
+    }
+  ],
+  "diff": { "runA": "run_…", "runB": "run_…", "fixed": [], "regressions": [], "persistent": [] }
 }
 ```
 
-### Exit Codes:
-- `0`: Clean run or taste questions only.
-- `1`: Mechanical defects detected (`has_defects`).
-- `2`: Configuration or runtime argument error.
+`actions` arrive defects-first, severest first. `groups` collapses actions that share a
+fix site (`src:file:line`, else type + remediation) into one edit with a count — fix the
+group once, not each member. Findings are fingerprinted by content, not DOM position, so
+inserting a control does not rename its neighbours' findings in the next diff.
+
+`pages[].screenshot` paths are relative to the report directory (`--out`, default
+`./ui-crawl-out`). `screenshot` is the viewport-sized render a model can actually read;
+`screenshotFull` is the whole document and exists only for tall pages;
+`darkScreenshot` exists only with `--theme-sweep`. `cropBase64` is present only with
+`--crops`, alongside a `crop` file path for callers with filesystem access. Over MCP the
+same pixels arrive as native `image` content blocks — see AGENTS.md §4.
+
+Findings are capped per route (`--max-findings`, default 200): defects outrank taste when
+the cap binds, and `summary.truncated` reports the dropped count — zero means complete.
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | No defects — clean, or taste questions only. |
+| `1` | One or more mechanical defects. |
+| `2` | Misconfiguration or missing arguments. |
 
 ---
 
-## Agent Integration Guide
+## What it detects
 
-See [`AGENTS.md`](./AGENTS.md) for full machine contracts, MCP schemas, closed-loop remediation workflows, and agent execution policies.
+**Mechanical (`defect`, exit 1)** — positive evidence of brokenness:
+
+`page-load-error` · `console-error` · `broken-asset` · `dead-button` · `button-threw` ·
+`broken-link` · `low-contrast` (< 3.0:1) · `missing-accessible-name` ·
+`keyboard-inaccessible` · `missing-image-alt` · `invalid-aria-reference` ·
+`invalid-aria-state` · `dialog-missing-label` · `layout-overlap` · `text-overlap` ·
+`text-line-collision` · `container-overflow` · `sibling-overlap` · `viewport-overflow` ·
+`pointer-intercepted` · `dark-mode-contrast` · `text-border-collision`
+
+**Judgement calls (`taste`, exit 0)** — a human or the calling model decides:
+
+`clipped-text` · `small-touch-target` · `tight-target` · `missing-affordance` ·
+`maybe-contextual-button` · `redundant-control` · `zoom-clip` · `zoom-overlap` ·
+`stale-selector` · `vertical-rhythm-drift` · `viewport-scale-imbalance` ·
+`unanchored-divider-bleed` · `adjacent-wordmark-echo`
+
+**Not our bug, and never a silent pass:** `robots-blocked` and `bot-challenge` (a WAF
+interstitial means the app never rendered; that is reported, not swallowed).
+
+The boundary is deterministic and lives in exactly one place (`src/triage.ts`). **Silence
+is always `taste`, never a `defect`.** There is no model in that path: this tool is called
+by a model, and a nested one would spend the caller's budget without their choosing and
+make the output non-reproducible for no gain.
 
 ---
 
-## Development & Testing
+MIT licensed. See [`LICENSE`](./LICENSE).
+
+## Design notes
+
+- **One CLI implementation.** `src/cli.ts` is the whole command line; `bin/ui-crawl.js` is
+  a shim. It used to exist twice, with nothing asserting the copies agreed.
+- **`src/` imports only `node:*`, relative modules, and `playwright`.** Enforced by
+  `test/importIndependence.test.ts`.
+- **Evidence is resolved before the page moves.** Controls are enumerated on the pristine
+  render and their boxes travel with the finding, because the interaction sweep clicks
+  links and by the time it finishes the document is often a different page. Crops taken
+  after a navigation would be pictures of the wrong thing.
+- **Crops are honest and scroll-aware.** Every finding type can produce one: the element
+  is scrolled into view and re-measured before the shutter, so below-fold findings get
+  real pictures. A finding whose element cannot be resolved carries no image rather than
+  a misleading one. Hit-testing likewise scrolls each control into view, so pointer
+  interception is checked below the fold instead of skipped.
+- **Final pixels, deterministically.** Navigation waits for webfonts (bounded) before any
+  audit or screenshot, and every browser context emulates `prefers-reduced-motion` so
+  looping media does not jitter screenshots or mutation counts.
+- **Contrast remediation names a colour.** `Set color to #737373 — same hue, darkened,
+  4.54:1 against #fafafa` — measured, not predicted. When no hue-preserving shift clears
+  the bar, the remediation says to change the background instead.
+- **Remediations are audited, not just emitted.** Each suggestion is applied in the live
+  DOM and re-measured; `verified: true` means the fix provably works on that page, and a
+  failure names the real edit (`!important` weight, `-webkit-text-fill-color`).
+- **No arbitrary evaluation.** The session exposes navigation and visual interaction. It
+  does not expose `eval`; nothing in looking at a page needs it.
+- **Snapshots ground to pixels.** Session screenshots and `--crops` audit renders carry
+  numbered set-of-marks badges: badge `n` is control `[n]`, so the text list and the
+  image agree without guessing. Actions name their badge in `snapshotIndex`. Clean
+  renders always exist alongside.
+
+### Prior art
+
+The set-of-marks grounding technique is not ours. It originates in Set-of-Mark prompting
+research and is used by agent frameworks including `browser-use`; we implemented it
+independently here. Everything else in `src/` is original to this repo, and the only
+runtime dependency is Playwright.
+- **Sessions are bounded.** Four concurrent, then a loud error rather than evicting a
+  session a caller still holds an id for.
+
+---
+
+## Development
 
 ```bash
-npm run build      # Compile TypeScript to dist/
-npm test           # Hermetic test suite (< 1s)
-npm run test:live  # Live browser test suite (requires Chromium)
-npm run typecheck  # TypeScript strict type checking
+npm run build      # compile src/ to dist/
+npm test           # hermetic suite
+npm run test:live  # + real-browser session, interaction, and parallel suites
+npm run typecheck
 ```
+
+Agent contracts, MCP schemas, and the closed-loop remediation workflow are in
+[`AGENTS.md`](./AGENTS.md).

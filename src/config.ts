@@ -1,11 +1,32 @@
 import * as os from 'node:os';
-import { NoopVisionPort, NoopTextTriagePort, type VisionPort, type TextTriagePort } from './ports.js';
 import type { ReportSink } from './sink.js';
 
 export interface Viewport {
   width: number;
   height: number;
   label?: string;
+}
+
+/**
+ * Playwright storage state: cookies plus per-origin localStorage. Structurally identical
+ * to what `BrowserContext.storageState()` returns and what `newContext` accepts, spelled
+ * out here so `src/` never imports Playwright types beyond the automation surface.
+ */
+export interface StorageStateData {
+  cookies: Array<{
+    name: string;
+    value: string;
+    domain: string;
+    path: string;
+    expires: number;
+    httpOnly: boolean;
+    secure: boolean;
+    sameSite: 'Strict' | 'Lax' | 'None';
+  }>;
+  origins: Array<{
+    origin: string;
+    localStorage: Array<{ name: string; value: string }>;
+  }>;
 }
 
 export interface CrawlConfig {
@@ -19,20 +40,13 @@ export interface CrawlConfig {
   zoomLevels?: number[];
   /** Viewports to render. Default one desktop. */
   viewports?: Viewport[];
-  /** Playwright storageState path for gated targets. Omit for open/dev-bypass local targets. */
-  storageState?: string;
+  /**
+   * Authenticated context for gated targets: a storageState path, or the state object
+   * itself (as produced by a --login flow). Omit for open/dev-bypass local targets.
+   */
+  storageState?: string | StorageStateData;
   /** Seed data file path or object containing localStorage / sessionStorage to pre-seed before loads. */
   seedStorage?: string | { localStorage?: Record<string, string>; sessionStorage?: Record<string, string> };
-  /** Injected vision model (v2). Default Noop. */
-  vision?: VisionPort;
-  /** Injected text model (v2). Default Noop. */
-  text?: TextTriagePort;
-  /**
-   * Ask the text port to observe controls the CSS inventory missed (menus, custom
-   * widgets) and merge them into the interaction sweep. Default false — opt-in so
-   * model spend never happens unless requested.
-   */
-  observeControls?: boolean;
   /** Where artifacts are written. Default FilesystemSink(outDir). */
   sink?: ReportSink;
   /** Output directory. Default './ui-crawl-out'. */
@@ -56,6 +70,13 @@ export interface CrawlConfig {
    * a control-dense page from running unbounded.
    */
   maxProbesPerPage?: number;
+  /**
+   * Cap on findings kept per route. Default 200. One pathological page must not be able
+   * to drown the report (and the screenshot budget) in hundreds of same-style hits;
+   * defects outrank taste when the cap binds, and the dropped count is reported as
+   * `truncated` rather than swallowed.
+   */
+  maxFindingsPerPage?: number;
   /** Skip the zoom-reflow pass. Default false. */
   skipZoom?: boolean;
   /** Skip WCAG contrast ratio auditing. Default false. */
@@ -108,11 +129,8 @@ export interface ResolvedConfig {
   maxPages: number;
   zoomLevels: number[];
   viewports: Viewport[];
-  storageState?: string;
+  storageState?: string | StorageStateData;
   seedStorage?: string | { localStorage?: Record<string, string>; sessionStorage?: Record<string, string> };
-  vision: VisionPort;
-  text: TextTriagePort;
-  observeControls: boolean;
   outDir: string;
   interactionTimeoutMs: number;
   navTimeoutMs: number;
@@ -121,6 +139,7 @@ export interface ResolvedConfig {
   perHostDelayMs: number;
   skipInteractionSweep: boolean;
   maxProbesPerPage: number;
+  maxFindingsPerPage: number;
   skipZoom: boolean;
   skipContrast: boolean;
   skipAffordance: boolean;
@@ -188,6 +207,9 @@ export function resolveConfig(c: CrawlConfig): ResolvedConfig {
   if (c.maxProbesPerPage !== undefined && (!Number.isInteger(c.maxProbesPerPage) || c.maxProbesPerPage <= 0)) {
     throw new Error(`ui-crawl: invalid maxProbesPerPage ${c.maxProbesPerPage}`);
   }
+  if (c.maxFindingsPerPage !== undefined && (!Number.isInteger(c.maxFindingsPerPage) || c.maxFindingsPerPage <= 0)) {
+    throw new Error(`ui-crawl: invalid maxFindingsPerPage ${c.maxFindingsPerPage}`);
+  }
   if (c.interactionTimeoutMs !== undefined && !isPositiveFiniteNumber(c.interactionTimeoutMs)) {
     throw new Error(`ui-crawl: invalid interactionTimeoutMs ${c.interactionTimeoutMs}`);
   }
@@ -206,6 +228,19 @@ export function resolveConfig(c: CrawlConfig): ResolvedConfig {
       throw new Error(`ui-crawl: invalid viewport ${viewport.label ?? `${viewport.width}x${viewport.height}`}`);
     }
   }
+  // Screenshot filenames derive from the label. Two viewports sharing one would silently
+  // overwrite each other's renders, so collisions get dimensions appended. Labels stay
+  // untouched when the input is unambiguous.
+  const labelCounts = new Map<string, number>();
+  for (const v of viewports) {
+    const base = v.label ?? `${v.width}x${v.height}`;
+    labelCounts.set(base, (labelCounts.get(base) ?? 0) + 1);
+  }
+  const dedupedViewports = viewports.map((v) => {
+    const base = v.label ?? `${v.width}x${v.height}`;
+    if ((labelCounts.get(base) ?? 0) <= 1) return v;
+    return { ...v, label: `${base}-${v.width}x${v.height}` };
+  });
 
   return {
     baseUrl: c.baseUrl.replace(/\/+$/, ''),
@@ -213,12 +248,9 @@ export function resolveConfig(c: CrawlConfig): ResolvedConfig {
     routes: c.routes ?? 'discover',
     maxPages: c.maxPages ?? 25,
     zoomLevels,
-    viewports,
+    viewports: dedupedViewports,
     storageState: c.storageState,
     seedStorage: c.seedStorage,
-    vision: c.vision ?? new NoopVisionPort(),
-    text: c.text ?? new NoopTextTriagePort(),
-    observeControls: c.observeControls ?? false,
     outDir: c.outDir ?? './ui-crawl-out',
     interactionTimeoutMs: c.interactionTimeoutMs ?? 1500,
     navTimeoutMs: c.navTimeoutMs ?? 15000,
@@ -227,6 +259,7 @@ export function resolveConfig(c: CrawlConfig): ResolvedConfig {
     perHostDelayMs: c.perHostDelayMs ?? 250,
     skipInteractionSweep: c.quick ? true : (c.skipInteractionSweep ?? false),
     maxProbesPerPage: c.quick ? 0 : (c.maxProbesPerPage ?? 40),
+    maxFindingsPerPage: c.maxFindingsPerPage ?? 200,
     skipZoom: c.quick ? true : (c.skipZoom ?? false),
     skipContrast: c.skipContrast ?? false,
     skipAffordance: c.skipAffordance ?? false,

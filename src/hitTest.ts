@@ -29,6 +29,10 @@ interface RawHitTestResult {
  * Deterministic pointer physics and hit-testing pass:
  * 1. Checks if document.elementFromPoint(center) reaches the control or is intercepted by an overlay.
  * 2. Checks if clickable elements satisfy WCAG 24x24px touch target minimums.
+ *
+ * Each control is scrolled into view before its center point is tested, so interception is
+ * checked where the control renders — including below the fold — rather than skipped past
+ * the first screenful. Scroll is restored before returning.
  */
 export async function auditPageHitTest(
   page: Page,
@@ -42,6 +46,7 @@ export async function auditPageHitTest(
         const root = containerSelector ? document.querySelector(containerSelector) : document;
         if (!root) return [];
         const elements = Array.from(root.querySelectorAll(selector));
+        const scrollBefore = { x: window.scrollX, y: window.scrollY };
 
         const openModal = !containerSelector
           ? document.querySelector('dialog[open], [role="dialog"]:not([aria-hidden="true"])')
@@ -80,6 +85,13 @@ export async function auditPageHitTest(
           if (openModal && !openModal.contains(el)) continue;
           if (!isVisible(el)) continue;
 
+        // A control below the fold has a real box but no photographable point: its center
+        // is outside the viewport, so `elementFromPoint` answers about whatever happens to
+        // be at those coordinates instead. Scroll it into view first, so interception is
+        // tested where the control actually renders rather than skipped everywhere past
+        // the first screenful. Scroll is synchronous for layout; no settle wait needed.
+        el.scrollIntoView({ block: 'center', inline: 'center' });
+
         const rect = el.getBoundingClientRect();
         const style = window.getComputedStyle(el);
 
@@ -113,7 +125,8 @@ export async function auditPageHitTest(
         const cx = rect.left + rect.width / 2;
         const cy = rect.top + rect.height / 2;
 
-        // Skip if center point is outside viewport
+        // A sticky header can still cover the point the scroll centered on; that is a real
+        // interception, not an artifact, so it is tested, not skipped.
         if (cx < 0 || cy < 0 || cx >= window.innerWidth || cy >= window.innerHeight) {
           continue;
         }
@@ -135,7 +148,10 @@ export async function auditPageHitTest(
         }
       }
 
-      return results;
+        // The loop scrolled the page control by control; leave it where it was found so
+        // later phases (and their screenshots) never depend on audit order.
+        window.scrollTo(scrollBefore.x, scrollBefore.y);
+        return results;
     }, { selector: SELECTOR, containerSelector: options.containerSelector })
     .catch(() => []);
 

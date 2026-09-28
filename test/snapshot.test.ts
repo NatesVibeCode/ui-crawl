@@ -38,3 +38,30 @@ describe('formatSnapshot', () => {
     expect(formatSnapshot([])).toBe('(no interactive elements)');
   });
 });
+
+describe('diffSnapshots', () => {
+  const e = (over: Partial<import('../src/snapshot.js').SnapshotEntry> = {}): import('../src/snapshot.js').SnapshotEntry => ({
+    index: 0, tag: 'button', name: 'Save', disabled: false, visible: true, css: 'button', inSelector: true,
+    ...over,
+  });
+
+  it('reports no changes honestly instead of an empty list', async () => {
+    const { diffSnapshots } = await import('../src/snapshot.js');
+    const before = [e(), e({ index: 1, tag: 'a', name: 'Home' })];
+    expect(diffSnapshots(before, [...before])).toContain('(no changes)');
+  });
+
+  it('marks added, changed, and gone controls without renumbering the survivors', async () => {
+    const { diffSnapshots } = await import('../src/snapshot.js');
+    const before = [e(), e({ index: 1, tag: 'a', name: 'Home' })];
+    const after = [
+      e({ name: 'Save now' }), // ~ changed
+      e({ index: 2, tag: 'input', name: 'Search' }), // + added (index 1 gone)
+    ];
+    const out = diffSnapshots(before, after);
+    expect(out).toContain('2 controls, 3 changed');
+    expect(out).toMatch(/^~ \[0\] button "Save now"/m);
+    expect(out).toMatch(/^\+ \[2\] input "Search"/m);
+    expect(out).toContain('- [1] a "Home" (gone)');
+  });
+});
