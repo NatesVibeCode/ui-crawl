@@ -448,3 +448,125 @@ describe.skipIf(!LIVE)('interaction primitives (live)', () => {
     }
   }, 180000);
 });
+
+describe.skipIf(!LIVE)('shadow DOM coverage (live)', () => {
+  it('lists, badges, probes, and resolves controls inside an open shadow root', async () => {
+    const { mkdirSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { default: path } = await import('node:path');
+    const { serveStatic } = await import('../src/serve.js');
+    const { buildSnapshot, markControls, formatSnapshot } = await import('../src/snapshot.js');
+    const { enumerateControls, resolveControl } = await import('../src/interactions.js');
+    const { chromium } = await import('playwright');
+
+    const root = path.join(tmpdir(), `uic-shadow-${process.pid}`);
+    rmSync(root, { recursive: true, force: true });
+    mkdirSync(root, { recursive: true });
+    writeFileSync(
+      path.join(root, 'index.html'),
+      '<!doctype html><html><body><button id="light">Light button</button><div id="host"></div>' +
+        '<script>const r = document.getElementById("host").attachShadow({ mode: "open" });' +
+        'r.innerHTML = \'<button id="shadow-btn">Shadow button</button>\' +' +
+        '  \'<div id="deep"></div>\';' +
+        'r.getElementById("shadow-btn").addEventListener("click", () => {' +
+        '  document.getElementById("light").textContent = "shadow click landed"; });' +
+        'r.getElementById("deep").innerHTML = "<button>deep shadow button</button>";</script>' +
+        '</body></html>',
+    );
+
+    const server = await serveStatic(root);
+    const browser = await chromium.launch({ headless: true });
+    try {
+      const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+      await page.goto(server.url + '/index.html', { waitUntil: 'domcontentloaded' });
+
+      // 1. The snapshot sees through the shadow boundary.
+      const entries = await buildSnapshot(page);
+      const names = entries.map((e) => e.name);
+      expect(names).toContain('Shadow button');
+      expect(names).toContain('deep shadow button');
+      expect(formatSnapshot(entries)).toMatch(/\[1\] button "Shadow button"/);
+
+      // 2. The addressing invariant: [n] is the same element the sweep and badges use.
+      const controls = await enumerateControls(page);
+      expect(controls.map((c) => c.accessibleName)).toContain('Shadow button');
+      for (const c of controls) {
+        const entry = entries.find((e) => e.index === c.index);
+        expect(entry, `snapshot entry for control index ${c.index}`).toBeDefined();
+        const locator = await resolveControl(page, c);
+        expect(((await locator!.textContent()) ?? '').trim()).toBe(entry!.name);
+        expect(c.snapshotIndex).toBe(entry!.index);
+      }
+
+      // 3. A click by index reaches into the shadow root.
+      const shadow = entries.find((e) => e.name === 'Shadow button')!;
+      await page.locator('button').nth(shadow.index).click();
+      expect(await page.locator('#light').textContent()).toBe('shadow click landed');
+
+      // 4. Badges land on shadow controls, and leave nothing behind.
+      const marks = await markControls(page);
+      expect(marks.count).toBe(entries.filter((e) => e.visible).length);
+      await marks.cleanup();
+      expect(await page.locator('[data-uicrawl-marks]').count()).toBe(0);
+    } finally {
+      await browser.close().catch(() => {});
+      await server.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 180000);
+});
+
+describe.skipIf(!LIVE)('shadow DOM: end-to-end audit (live)', () => {
+  it('finds, locates, badges, and crops defects inside a shadow root', async () => {
+    const { mkdirSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { default: path } = await import('node:path');
+    const { serveStatic } = await import('../src/serve.js');
+    const { crawl } = await import('../src/index.js');
+    const { buildAgentPayload } = await import('../src/report.js');
+
+    const root = path.join(tmpdir(), `uic-shadow-audit-${process.pid}`);
+    const outDir = path.join(root, 'out');
+    rmSync(root, { recursive: true, force: true });
+    mkdirSync(root, { recursive: true });
+    writeFileSync(
+      path.join(root, 'index.html'),
+      '<!doctype html><html><body><button id="light">Light</button><div id="host"></div><script>' +
+        'const r = document.getElementById("host").attachShadow({ mode: "open" });' +
+        'r.innerHTML = \'<button id="shadow-btn">Shadow button</button>\' +' +
+        '  \'<img src="x.png">\' +' +
+        'r.getElementById("shadow-btn").addEventListener("click", () => {});' +
+        '</script></body></html>',
+    );
+
+    const server = await serveStatic(root);
+    try {
+      const result = await crawl({
+        baseUrl: server.url,
+        routes: ['/index.html'],
+        outDir,
+        dbPath: ':memory:',
+        captureCrops: true,
+        skipInteractionSweep: true,
+        skipZoom: true,
+        guidance: false,
+        networkInventory: false,
+      });
+      const payload = buildAgentPayload(result);
+      expect(payload.actions.length).toBeGreaterThan(0);
+      for (const action of payload.actions) {
+        // Every finding in a shadow root must still be locatable, photographable, and
+        // tied to a badge — otherwise the crop would silently be missing.
+        expect(action.cropBase64, `crop for ${action.type} ${action.selector ?? ''}`).toMatch(
+          /^data:image\/png;base64,/,
+        );
+        expect(action.snapshotIndex, `badge for ${action.type} ${action.selector ?? ''}`).toBeTypeOf(
+          'number',
+        );
+      }
+    } finally {
+      await server.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 180000);
+});

@@ -41,18 +41,22 @@ export async function enumerateControls(page: Page): Promise<Control[]> {
   // NOTE: keep this callback free of NAMED inner functions. tsx/esbuild rewrites named
   // functions to reference a `__name` helper that does not exist in Playwright's isolated
   // world, which makes the whole $$eval throw. Inline everything with anonymous arrows.
-  // NOTE: a single page.evaluate with an object argument, not $$eval with a trailing
-  // selector argument — the latter's overloads resolve differently under the typecheck
-  // config (bundler) and the build config (NodeNext), and the build one rejects it.
-  const raw = await page.evaluate(
-    (args: { selector: string; snapshotSelector: string }) => {
-      const els = Array.from(document.querySelectorAll(args.selector));
+  // NOTE: read through `page.locator(...).evaluateAll(...)`, not `$$eval` or a raw
+  // `querySelectorAll`. Playwright's selector engine pierces open shadow roots, so the
+  // sweep now probes controls inside web components instead of skipping them.
+  //
+  // One call on the SNAPSHOT pool (which is a superset of the probe SELECTOR), filtered
+  // in-page: that yields both the controls to probe and, for free, each control's
+  // position in the snapshot list — the same index the snapshot text prints and the
+  // set-of-marks badges draw. Two separate calls could not share element identity, and
+  // hand-rolled shadow traversal would risk an index that addresses a different element
+  // than the one it was measured from.
+  const raw = await page.locator(SNAPSHOT_SELECTOR).evaluateAll(
+    (els, args: { probeSelector: string }) => {
       const here = new URL(document.baseURI);
-      // Snapshot-pool positions, so a control's finding can name the badge a marked
-      // screenshot shows for it. Computed here, on the pristine render: after the sweep
-      // clicks things, insertions shift every position below them.
-      const snapshotPool = Array.from(document.querySelectorAll(args.snapshotSelector));
-      return els.map((el, index) => {
+      const snapshotPool = els;
+      const matched = els.filter((el) => el.matches(args.probeSelector));
+      return matched.map((el, index) => {
       const tag = el.tagName.toLowerCase();
       const role = el.getAttribute('role') || undefined;
       const disabled = el.hasAttribute('disabled') || el.getAttribute('aria-disabled') === 'true';
@@ -113,7 +117,7 @@ export async function enumerateControls(page: Page): Promise<Control[]> {
       return { index, tag, role, accessibleName, disabled, visible, navTarget, formAction, destructive: false, landmark, snapshotIndex: snapshotPool.indexOf(el), box: { selector: `${tag}:nth(${index})`, x: rect.x, y: rect.y, w: rect.width, h: rect.height } };
       });
     },
-    { selector: SELECTOR, snapshotSelector: SNAPSHOT_SELECTOR },
+    { probeSelector: SELECTOR },
   );
   for (const c of raw) c.destructive = isDestructiveLabel(c.accessibleName);
   return raw as Control[];

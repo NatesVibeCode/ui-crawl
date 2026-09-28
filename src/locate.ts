@@ -47,6 +47,115 @@ export function selectorCandidates(selector: string): SelectorCandidate[] {
     .filter((c) => c.selector && !c.selector.includes(' ∩ '));
 }
 
+const POOL_KEY = '__uicrawlPools';
+
+/**
+ * Stage the element pools the resolver indexes, ONCE per document.
+ *
+ * The pools have to be pierced (Playwright's engine) to see inside shadow roots, but
+ * pierced results cannot be handed to `page.evaluate` — element handles do not cross
+ * that boundary. So they are parked on `window` here and read back in-page by
+ * `resolveEvidence`. Guarded by a flag so a page pays for it once no matter how many
+ * findings resolve against it, and idempotent so a re-prime after navigation is free.
+ *
+ * Safe to skip: the resolver falls back to native pools when the global is absent, so a
+ * page that never sees a finding simply never primes.
+ */
+export async function primeDeepPools(page: Page): Promise<void> {
+  try {
+    const present = await page.evaluate((k) => !!(window as unknown as Record<string, unknown>)[k], POOL_KEY);
+    if (present) return;
+    // Each pool has its own selector, so they are staged one call each. Element handles
+    // cannot cross into `page.evaluate`, hence the window hand-off.
+    await page.locator(SELECTOR).evaluateAll((els, k: string) => {
+      const w = window as unknown as Record<string, Record<string, unknown>>;
+      w[k] = { ...(w[k] ?? {}), probe: els };
+    }, POOL_KEY);
+    await page.locator(SNAPSHOT_SELECTOR).evaluateAll((els, k: string) => {
+      const w = window as unknown as Record<string, Record<string, unknown>>;
+      w[k] = { ...(w[k] ?? {}), snapshot: els };
+    }, POOL_KEY);
+    await page.locator('*').evaluateAll((els, k: string) => {
+      const w = window as unknown as Record<string, Record<string, unknown>>;
+      w[k] = { ...(w[k] ?? {}), all: els };
+    }, POOL_KEY);
+    await page.locator('img').evaluateAll((els, k: string) => {
+      const w = window as unknown as Record<string, Record<string, unknown>>;
+      w[k] = { ...(w[k] ?? {}), images: els };
+    }, POOL_KEY);
+
+    // Install the extraction routine once, so the plain-CSS branch (which reaches the
+    // element through a locator handle) and the `:nth(n)` branch (which finds it
+    // in-page) can share one implementation instead of two that can drift.
+    await page.evaluate(() => {
+      (window as unknown as Record<string, unknown>).__uicrawlExtract = (el: Element, sel: string) => {
+        const rect = el.getBoundingClientRect();
+        const anyEl = el as unknown as Record<string, unknown>;
+        const primedSnap = (
+          window as unknown as Record<string, Record<string, Element[]>>
+        ).__uicrawlPools?.snapshot;
+        const snapIndex = (primedSnap ?? Array.from(document.querySelectorAll('*'))).indexOf(el);
+
+        const out: Record<string, unknown> = {};
+        const attrFile = el.getAttribute('data-source-file') || el.getAttribute('data-file');
+        const attrLine = el.getAttribute('data-source-line') || el.getAttribute('data-line');
+        const attrComp = el.getAttribute('data-component') || el.getAttribute('data-testid');
+        if (attrFile) {
+          out.file = attrFile;
+          const parsedLine = parseInt(attrLine ?? '', 10);
+          if (!Number.isNaN(parsedLine)) out.line = parsedLine;
+        }
+        if (attrComp) out.component = attrComp;
+
+        const fiberKey = Object.keys(anyEl).find(
+          (k) => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'),
+        );
+        if (fiberKey) {
+          let curr = anyEl[fiberKey] as Record<string, unknown> | null;
+          while (curr) {
+            const type = curr.type || curr.elementType;
+            if (typeof type === 'function' || (type && typeof type === 'object')) {
+              const comp =
+                (type as { displayName?: string; name?: string }).displayName ||
+                (type as { name?: string }).name;
+              if (comp && !out.component) out.component = comp;
+            }
+            const dbg = curr._debugSource as
+              | { fileName?: string; lineNumber?: number; columnNumber?: number }
+              | undefined;
+            if (dbg && !out.file) {
+              out.file = dbg.fileName;
+              out.line = dbg.lineNumber;
+              out.column = dbg.columnNumber;
+            }
+            curr = curr.return as Record<string, unknown> | null;
+          }
+        }
+
+        const vnode = (anyEl.__vnode || anyEl._vnode) as { type?: Record<string, unknown> } | undefined;
+        if (vnode?.type) {
+          if (!out.component) out.component = vnode.type.__name ?? vnode.type.name;
+          if (!out.file) out.file = vnode.type.__file;
+        }
+
+        const svelte = anyEl.__svelte_meta as { loc?: { file?: string; line?: number } } | undefined;
+        if (svelte?.loc && !out.file) {
+          out.file = svelte.loc.file;
+          out.line = svelte.loc.line;
+        }
+
+        return {
+          box: { selector: sel, x: rect.x, y: rect.y, w: rect.width, h: rect.height },
+          source: out.file || out.component ? out : null,
+          snapshotIndex: snapIndex,
+        };
+      };
+    });
+  } catch {
+    /* a page that cannot be primed simply falls back to native pools */
+  }
+}
+
 export interface EvidenceTarget {
   /** Viewport-relative box of the first resolvable candidate, in CSS px. */
   box?: Box;
@@ -115,7 +224,36 @@ export async function scrollTargetIntoView(page: Page, selector: string): Promis
  * Returns whatever it can prove and nothing it cannot.
  */
 export async function resolveEvidence(page: Page, selector: string): Promise<EvidenceTarget> {
+  // The plain-CSS path goes through Playwright's selector engine so it can cross a shadow
+  // boundary (`document.querySelector` cannot), and so its element ordering matches the
+  // snapshot. The `:nth(n)` path below cannot use a locator directly, because the index
+  // base depends on which detector emitted it, so it resolves in-page against the primed
+  // pools. Both branches then extract through the same installed routine.
+  await primeDeepPools(page);
+
   for (const candidate of selectorCandidates(selector)) {
+    if (!/:nth\(\d+\)$/.test(candidate.selector)) {
+      const resolved = (await page
+        .locator(candidate.selector)
+        .first()
+        .evaluate(
+          (el, args: { sel: string }) =>
+            (
+              window as unknown as {
+                __uicrawlExtract: (e: Element, s: string) => unknown;
+              }
+            ).__uicrawlExtract(el, args.sel),
+          { sel: candidate.selector },
+        )
+        .catch(() => null)) as { box: Box; source: SourceLocation | null; snapshotIndex: number } | null;
+      if (!resolved) continue;
+      return {
+        box: resolved.box.w > 0 && resolved.box.h > 0 ? resolved.box : undefined,
+        source: resolved.source ?? undefined,
+        snapshotIndex: resolved.snapshotIndex >= 0 ? resolved.snapshotIndex : undefined,
+      };
+    }
+
     const resolved = (await page
       .evaluate(
         (args: { sel: string; name: string | null; probe: string; snapshotProbe: string }) => {
@@ -147,11 +285,16 @@ export async function resolveEvidence(page: Page, selector: string): Promise<Evi
             // indexes `querySelectorAll('*')`. The tag is a readability hint, so index
             // first and verify the tag afterwards — filtering by tag before indexing
             // points at a different element than the detector meant.
+            // Prefer the primed (pierced) pools; fall back to native ones when this page
+            // was never primed, so behaviour is never worse than before shadow support.
+            const primed = (window as unknown as Record<string, Record<string, Element[]>>)[
+              '__uicrawlPools'
+            ];
             const pools: Element[][] = [
-              Array.from(document.querySelectorAll(args.probe)),
-              Array.from(document.querySelectorAll(args.snapshotProbe)),
-              Array.from(document.querySelectorAll('*')),
-              Array.from(document.images),
+              primed?.probe ?? Array.from(document.querySelectorAll(args.probe)),
+              primed?.snapshot ?? Array.from(document.querySelectorAll(args.snapshotProbe)),
+              primed?.all ?? Array.from(document.querySelectorAll('*')),
+              primed?.images ?? Array.from(document.images),
             ];
 
             // A named control is the only disambiguator a caller gave us, so a pool entry
@@ -180,64 +323,11 @@ export async function resolveEvidence(page: Page, selector: string): Promise<Evi
           }
 
           if (!el) return null;
-          const rect = el.getBoundingClientRect();
-          const anyEl = el as unknown as Record<string, unknown>;
-          const snapIndex = Array.from(document.querySelectorAll(args.snapshotProbe)).indexOf(el);
-
-          // Framework source: data attributes, then React Fiber, Vue vnode, Svelte meta.
-          const out: Record<string, unknown> = {};
-          const attrFile = el.getAttribute('data-source-file') || el.getAttribute('data-file');
-          const attrLine = el.getAttribute('data-source-line') || el.getAttribute('data-line');
-          const attrComp = el.getAttribute('data-component') || el.getAttribute('data-testid');
-          if (attrFile) {
-            out.file = attrFile;
-            const parsedLine = parseInt(attrLine ?? '', 10);
-            if (!Number.isNaN(parsedLine)) out.line = parsedLine;
-          }
-          if (attrComp) out.component = attrComp;
-
-          const fiberKey = Object.keys(anyEl).find(
-            (k) => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'),
-          );
-          if (fiberKey) {
-            let curr = anyEl[fiberKey] as Record<string, unknown> | null;
-            while (curr) {
-              const type = curr.type || curr.elementType;
-              if (typeof type === 'function' || (type && typeof type === 'object')) {
-                const comp =
-                  (type as { displayName?: string; name?: string }).displayName ||
-                  (type as { name?: string }).name;
-                if (comp && !out.component) out.component = comp;
-              }
-              const dbg = curr._debugSource as
-                | { fileName?: string; lineNumber?: number; columnNumber?: number }
-                | undefined;
-              if (dbg && !out.file) {
-                out.file = dbg.fileName;
-                out.line = dbg.lineNumber;
-                out.column = dbg.columnNumber;
-              }
-              curr = curr.return as Record<string, unknown> | null;
+          return (
+            window as unknown as {
+              __uicrawlExtract: (e: Element, s: string) => unknown;
             }
-          }
-
-          const vnode = (anyEl.__vnode || anyEl._vnode) as { type?: Record<string, unknown> } | undefined;
-          if (vnode?.type) {
-            if (!out.component) out.component = vnode.type.__name ?? vnode.type.name;
-            if (!out.file) out.file = vnode.type.__file;
-          }
-
-          const svelte = anyEl.__svelte_meta as { loc?: { file?: string; line?: number } } | undefined;
-          if (svelte?.loc && !out.file) {
-            out.file = svelte.loc.file;
-            out.line = svelte.loc.line;
-          }
-
-          return {
-            box: { selector: sel, x: rect.x, y: rect.y, w: rect.width, h: rect.height },
-            source: out.file || out.component ? (out as SourceLocation) : null,
-            snapshotIndex: snapIndex,
-          };
+          ).__uicrawlExtract(el, sel);
         },
         {
           sel: candidate.selector,
@@ -255,6 +345,7 @@ export async function resolveEvidence(page: Page, selector: string): Promise<Evi
         snapshotIndex: resolved.snapshotIndex >= 0 ? resolved.snapshotIndex : undefined,
       };
     }
+    continue;
   }
 
   return {};

@@ -73,12 +73,16 @@ export interface MarkResult {
  * the clean DOM.
  */
 export async function markControls(page: Page, cap = SNAPSHOT_CAP): Promise<MarkResult> {
+  // `locator.evaluateAll`, not `querySelectorAll`: the native call cannot see inside a
+  // shadow root, so a component's controls would be left unbadged — and an unbadged
+  // control is exactly the one an agent cannot ground to pixels. The element order and the
+  // index numbering match `buildSnapshot` because both use this same engine.
   const count = (await page
-    .evaluate(
-      (args: { selector: string; cap: number }) => {
+    .locator(SNAPSHOT_SELECTOR)
+    .evaluateAll(
+      (els, max: number) => {
         const old = document.querySelector('[data-uicrawl-marks]');
         if (old) old.remove();
-        const els = document.querySelectorAll(args.selector);
         const host = document.createElement('div');
         host.setAttribute('data-uicrawl-marks', 'true');
         host.setAttribute('aria-hidden', 'true');
@@ -87,7 +91,7 @@ export async function markControls(page: Page, cap = SNAPSHOT_CAP): Promise<Mark
         const vpW = window.innerWidth;
         const vpH = window.innerHeight;
         let placed = 0;
-        for (let i = 0; i < els.length && placed < args.cap; i++) {
+        for (let i = 0; i < els.length && placed < max; i++) {
           const el = els[i];
           const r = el.getBoundingClientRect();
           if (r.width <= 0 || r.height <= 0) continue;
@@ -111,7 +115,7 @@ export async function markControls(page: Page, cap = SNAPSHOT_CAP): Promise<Mark
         document.documentElement.appendChild(host);
         return placed;
       },
-      { selector: SNAPSHOT_SELECTOR, cap },
+      cap,
     )
     .catch(() => 0)) as number;
 
@@ -171,12 +175,18 @@ export function diffSnapshots(before: SnapshotEntry[], after: SnapshotEntry[]): 
  * Capture interactive elements. Prioritizes visible controls the probe SELECTOR
  * misses, then a bounded sample of covered controls for context. All evaluate
  * callbacks stay free of NAMED functions (tsx/esbuild `__name` injection).
+ *
+ * Read through `page.locator(...).evaluateAll(...)` rather than `$$eval` so Playwright's
+ * own selector engine resolves the list. That engine pierces open shadow roots — the
+ * controls inside a web component were previously invisible to every snapshot, badge, and
+ * addressable index here — and, critically, it returns them in the same order `.nth()`
+ * addresses them. Since a control's identity IS its position in this list, a hand-rolled
+ * walker would risk handing the caller an index that clicks a different element; using
+ * the same engine for both ends makes that impossible.
  */
 export async function buildSnapshot(page: Page, cap = SNAPSHOT_CAP): Promise<SnapshotEntry[]> {
-  const raw = await page.$$eval(
-    SNAPSHOT_SELECTOR,
+  const raw = await page.locator(SNAPSHOT_SELECTOR).evaluateAll(
     (els, selectSelector: string) => {
-      const here = new URL(document.baseURI);
       const mapped = els.map((el, index) => {
         const tag = el.tagName.toLowerCase();
         const role = el.getAttribute('role') || undefined;
@@ -211,10 +221,17 @@ export async function buildSnapshot(page: Page, cap = SNAPSHOT_CAP): Promise<Sna
           if (tid) css = `[data-testid="${tid.replace(/"/g, '\\"')}"]`;
           else {
             const parts: string[] = [];
+            // A shadow root is a document boundary: `parentElement` is null above it, so
+            // walking up alone would stop at the component and produce a selector that
+            // matches every instance of that tag. Cross into the host instead, so the
+            // selector is scoped to this component.
+            const hostOf = (node: Element): Element | null =>
+              node.parentElement ?? (node.getRootNode() as ShadowRoot).host ?? null;
             let node: Element | null = el;
-            for (let depth = 0; node && node.nodeType === 1 && depth < 6; depth++) {
-              const parent: Element | null = node.parentElement;
+            for (let depth = 0; node && node.nodeType === 1 && depth < 8; depth++) {
+              const parent: Element | null = hostOf(node);
               if (!parent) break;
+              const crossedShadow = node.parentElement === null;
               const tagL = node.tagName.toLowerCase();
               let nth = 1;
               let sib = node.previousElementSibling;
@@ -240,6 +257,10 @@ export async function buildSnapshot(page: Page, cap = SNAPSHOT_CAP): Promise<Sna
               if (parent.id) {
                 parts.unshift(`#${parent.id}`);
                 break;
+              }
+              if (crossedShadow) {
+                // The selector is only meaningful if it can get back through the root.
+                parts.unshift('>>>');
               }
               node = parent;
             }

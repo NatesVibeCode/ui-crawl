@@ -115,6 +115,9 @@ re-snapshot before concluding anything is broken.
   is `taste`, not a pass. Say so; don't report it as "no issues found".
 - **Duplicate viewport labels get dimensions appended** automatically — your screenshots
   won't silently overwrite each other.
+- **Web components work.** Controls inside open shadow roots appear in the snapshot, get
+  numbered badges, and are clickable by index. If a control is missing from a snapshot
+  entirely, it is most likely in a closed shadow root — which is genuinely opaque.
 - **Findings are fingerprinted by content, not DOM position.** Inserting an element does
   not rename its neighbours' findings, so a repair diff reads as repairs, not churn.
 

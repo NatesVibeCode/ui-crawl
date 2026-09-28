@@ -252,6 +252,10 @@ MIT licensed. See [`LICENSE`](./LICENSE).
   failure names the real edit (`!important` weight, `-webkit-text-fill-color`).
 - **No arbitrary evaluation.** The session exposes navigation and visual interaction. It
   does not expose `eval`; nothing in looking at a page needs it.
+- **Web components are not a blind spot.** Open shadow roots are pierced for control
+  enumeration, snapshots, badges, the click sweep, and evidence resolution — so a finding
+  inside a component still gets a `file:line`, a badge, and a crop. The contrast palette
+  and the layout/typography/spacing passes do not pierce yet; see AGENTS.md §2b.
 - **Snapshots ground to pixels.** Session screenshots and `--crops` audit renders carry
   numbered set-of-marks badges: badge `n` is control `[n]`, so the text list and the
   image agree without guessing. Actions name their badge in `snapshotIndex`. Clean

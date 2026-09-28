@@ -20,7 +20,7 @@ import { auditPageLayout, boxIntersection } from './layout.js';
 import { auditPageHitTest } from './hitTest.js';
 import { resolveSourceForSelector } from './source.js';
 import { markControls } from './snapshot.js';
-import { resolveEvidence, scrollTargetIntoView, type EvidenceTarget } from './locate.js';
+import { resolveEvidence, scrollTargetIntoView, primeDeepPools, type EvidenceTarget } from './locate.js';
 import { openDatabase, saveRun, getDiff, hasRun } from './db.js';
 import {
   auditTabPanels,
@@ -251,6 +251,8 @@ async function enrichEvidence(
   // Cropping scrolls the page to each finding in turn; leave the scroll where it was so
   // later phases (and any future reader of this function) never depend on crop order.
   const scrollBefore = await readScroll(page);
+  // Stage pierced element pools once so findings inside shadow roots can be resolved.
+  await primeDeepPools(page);
   try {
     for (let i = 0; i < findings.length; i++) {
       const finding = findings[i];
@@ -427,6 +429,11 @@ async function executeVisit(
     if (!challenged) {
       controls = await enumerateControls(page).catch(() => []);
     }
+
+    // Stage pierced element pools once, early, so every later phase (accessibility
+    // images, evidence resolution) can read them. Guarded and idempotent: the first
+    // call pays four round trips, every later one is a single boolean check.
+    await primeDeepPools(page);
 
     // Set-of-marks render for vision callers: badge n sits on control [n]. Only with
     // captureCrops (the "a vision model is watching" flag), only on real app renders,

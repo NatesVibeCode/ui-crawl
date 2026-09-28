@@ -1,8 +1,13 @@
 node_modules/
 ui-crawl-out/
 screenshots/
+crops/
 *.log
 .DS_Store
 dist/
 *.db
 .ui-crawl.db
+# Local harness/permission overrides — machine-local, not source. Committed by accident
+# they would deny the very tools this project needs (bash/edit/skill).
+opencode.json
+opencode.local.json

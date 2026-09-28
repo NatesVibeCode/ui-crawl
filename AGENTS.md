@@ -82,6 +82,28 @@ production. Pass the object straight back into `ui_audit` / `ui_open` as `storag
 
 ---
 
+## 2b. Shadow DOM coverage
+
+Controls and elements inside **open** shadow roots are in scope. The snapshot lists them,
+set-of-marks badges number them, the interaction sweep probes them, and findings resolve to
+a box, a `snapshotIndex`, and a crop — a web component is not a blind spot.
+
+This works because those paths read through Playwright's selector engine
+(`locator.evaluateAll` / `locator(sel).first()`), which pierces shadow roots, instead of a
+raw `querySelectorAll`. That is also what keeps `[n]` honest: the snapshot, the badges, and
+`ui_act click {index}` all resolve through the same engine, so an index always addresses
+the element it was measured from.
+
+**Not yet piercing** (they still query the document directly): the contrast palette
+(`colors.ts` text indexing), layout/typography (`layout.ts`), spacing, affordance,
+`state.ts` ARIA checks, and `appState.ts` dialog/tab scanning. A defect *inside* a shadow
+root in those categories is not detected yet. `a11y.ts` and `locate.ts` do pierce.
+
+A selector that crosses a shadow boundary is written `host >>> .inner`, so you can tell at
+a glance that it addresses into a component.
+
+---
+
 ## 3. Live session — the navigation loop
 
 Open a session, then act one step at a time. Every action returns the resulting observable

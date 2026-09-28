@@ -16,9 +16,13 @@ export async function auditPageAccessibility(
   route: string,
   options: AccessibilityOptions = {},
 ): Promise<RawFinding[]> {
+  // `locator.evaluateAll` rather than a raw query: Playwright's engine pierces open
+  // shadow roots, so an unnamed control inside a web component is audited instead of
+  // being invisible to the whole accessibility pass.
   const result = await page
-    .evaluate((selector) => {
-      const elements = Array.from(document.querySelectorAll(selector));
+    .locator(SNAPSHOT_SELECTOR)
+    .evaluateAll((els) => {
+      const elements = els;
       const visible = (el: Element): boolean => {
         const h = el as HTMLElement;
         const rect = h.getBoundingClientRect();
@@ -96,7 +100,12 @@ export async function auditPageAccessibility(
         }
       });
 
-      Array.from(document.images).forEach((image, index) => {
+      // `img` is not part of SNAPSHOT_SELECTOR, so it cannot come from `els`. Read the
+      // pierced image pool staged by `primeDeepPools`, falling back to the document-level
+      // collection when the page was never primed.
+      const primed = (window as unknown as Record<string, Record<string, Element[]>>).__uicrawlPools;
+      const images = primed?.images ?? Array.from(document.images);
+      images.forEach((image, index) => {
         if (!visible(image) || image.hasAttribute('aria-hidden')) return;
         if (!image.hasAttribute('alt')) {
           findings.push({
@@ -110,7 +119,7 @@ export async function auditPageAccessibility(
       if (previous && previous.isConnected) previous.focus({ preventScroll: true });
       else (document.activeElement as HTMLElement | null)?.blur();
       return findings;
-    }, SNAPSHOT_SELECTOR)
+    })
     .catch(() => []);
 
   return result.map((item) => ({
