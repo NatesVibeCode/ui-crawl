@@ -1,5 +1,6 @@
 import type { Page } from 'playwright';
 import type { RawFinding, ColorPalette } from './types.js';
+import { primeSelectors } from './locate.js';
 
 export interface Rgba {
   r: number;
@@ -393,6 +394,7 @@ export async function auditPageColors(
   route: string,
 ): Promise<{ rawFindings: RawFinding[]; palette: ColorPalette; textDigest: number; textLength: number }> {
   // Pass as a string to guarantee tsx/esbuild does not inject `__name` helpers into the browser context.
+  await primeSelectors(page, ['h1, h2, h3, h4, h5, h6, p, a, button, [role="button"], label, th, td, li, span, code, pre']);
   const script = `(() => {
     function parse(str) {
       if (!str) return null;
@@ -494,8 +496,9 @@ export async function auditPageColors(
     var textCounts = new Map();
     var accentCounts = new Map();
 
+    var deepAll = (window.__uicrawlQ || function(s){ return Array.prototype.slice.call(document.querySelectorAll(s)); });
     var textEls = Array.from(
-      document.querySelectorAll('h1, h2, h3, h4, h5, h6, p, a, button, [role="button"], label, th, td, li, span, code, pre')
+      deepAll('h1, h2, h3, h4, h5, h6, p, a, button, [role="button"], label, th, td, li, span, code, pre')
     );
 
     var seenText = new Set();

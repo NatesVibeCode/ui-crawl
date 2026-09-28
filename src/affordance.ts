@@ -1,6 +1,7 @@
 import type { Page } from 'playwright';
 import type { Control, RawFinding } from './types.js';
 import { SELECTOR } from './interactions.js';
+import { primeSelectors } from './locate.js';
 
 export interface AffordanceCheck {
   hadPointer: boolean;
@@ -160,10 +161,13 @@ async function auditViaCDP(page: Page, controls: Control[]): Promise<Map<number,
 
 async function auditViaInPage(page: Page, controls: Control[]): Promise<Map<number, AffordanceCheck>> {
   const indices = controls.map((c) => c.index).filter((i) => i >= 0);
+  // Pierced control list, so affordance is also judged for controls inside a component.
+  await primeSelectors(page, [SELECTOR]);
   const evalResult = await page
     .evaluate(
       ([selector, targetIndices]) => {
-        const els = Array.from(document.querySelectorAll(selector)) as HTMLElement[];
+        const deepAll = (window as unknown as { __uicrawlQ: (s: string) => Element[] }).__uicrawlQ;
+        const els = deepAll(selector) as HTMLElement[];
         const hoverSelectors: string[] = [];
         const activeSelectors: string[] = [];
 

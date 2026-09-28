@@ -372,7 +372,22 @@ export interface CrawlResult {
   guidance?: GuidanceSummary;
   /** Rolled-up unique API paths across pages (scraping surface). */
   apiIndex?: { method: string; url: string; pages: string[]; statuses: number[] }[];
+  /**
+   * Detectors that threw and therefore reported nothing.
+   *
+   * A crashed detector must never read as "clean" — that is how a real defect gets
+   * silently dropped. Any entry here means the run's coverage is incomplete, so the
+   * payload says so out loud instead of implying the page was checked.
+   */
+  detectorFailures?: DetectorFailure[];
   reportPath?: string;
+}
+
+/** One detector that failed to complete, for the given route. */
+export interface DetectorFailure {
+  route: string;
+  detector: string;
+  message: string;
 }
 
 /** Compact guidance for findings.json (raw files live under guidance/). */

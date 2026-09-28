@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { chromium, webkit, firefox, type Browser, type BrowserContext, type Page } from 'playwright';
 import type { ResolvedConfig } from './config.js';
 import { crawlUserAgent } from './config.js';
+import { installDeepQuery } from './locate.js';
 
 export interface Session {
   browser: Browser;
@@ -33,6 +34,9 @@ export async function buildContext(
     reducedMotion: 'reduce',
     ...(userAgent ? { userAgent } : {}),
   });
+  // Install the pierced-query readers before any document loads, so every detector can
+  // reach inside open shadow roots (see locate.ts).
+  await installDeepQuery(context);
   context.setDefaultNavigationTimeout(cfg.navTimeoutMs);
   context.setDefaultTimeout(cfg.navTimeoutMs);
 

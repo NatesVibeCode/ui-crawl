@@ -1,4 +1,4 @@
-import type { CrawlResult, Finding, FindingType, Severity, Bucket, SourceLocation, DiffResult } from './types.js';
+import type { CrawlResult, DetectorFailure, Finding, FindingType, Severity, Bucket, SourceLocation, DiffResult } from './types.js';
 
 export interface Summary {
   defects: number;
@@ -331,6 +331,11 @@ export interface AgentPayload {
     byType: Record<string, number>;
     /** Findings dropped by the per-page cap. Zero means the report is complete. */
     truncated: number;
+    /**
+     * Detectors that threw and reported nothing. Non-empty means this run's coverage is
+     * incomplete, so an empty `defects` count here is NOT evidence the page is clean.
+     */
+    detectorFailures: DetectorFailure[];
   };
   actions: AgentAction[];
   routes: string[];
@@ -414,6 +419,7 @@ export function buildAgentPayload(result: CrawlResult): AgentPayload {
       pagesCrawled: result.pages.length,
       byType: sum.byType,
       truncated: result.truncated ?? 0,
+      detectorFailures: result.detectorFailures ?? [],
     },
     actions: sorted,
     groups: buildGroups(sorted),

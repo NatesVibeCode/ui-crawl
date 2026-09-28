@@ -1,5 +1,6 @@
 import type { Page } from 'playwright';
 import type { Box, RawFinding } from './types.js';
+import { primeSelectors } from './locate.js';
 
 export interface SpacingIssue {
   kind: 'tight-target';
@@ -28,9 +29,13 @@ export function edgeDistance(a: Box, b: Box): number {
 
 /** In-browser audit for touch targets and crowded interactive controls. */
 export async function auditPageSpacing(page: Page, route: string): Promise<RawFinding[]> {
-  const issues = await page.evaluate(() => {
-    const SELECTOR = 'button, a[href], [role="button"], input[type="submit"], input[type="button"]';
-    const els = Array.from(document.querySelectorAll(SELECTOR)) as HTMLElement[];
+  const SPACING_SELECTOR =
+    'button, a[href], [role="button"], input[type="submit"], input[type="button"]';
+  await primeSelectors(page, [SPACING_SELECTOR]);
+  const issues = await page.evaluate((sel: string) => {
+    const SELECTOR = sel;
+    const deepAll = (window as unknown as { __uicrawlQ: (s: string) => Element[] }).__uicrawlQ;
+    const els = deepAll(SELECTOR) as HTMLElement[];
     const boxes: { elIndex: number; tag: string; selector: string; isInlineLink: boolean; x: number; y: number; w: number; h: number }[] = [];
 
     for (let i = 0; i < els.length; i++) {
@@ -124,7 +129,7 @@ export async function auditPageSpacing(page: Page, route: string): Promise<RawFi
     }
 
     return found;
-  });
+  }, SPACING_SELECTOR);
 
   return issues.map((iss) => ({
     route,

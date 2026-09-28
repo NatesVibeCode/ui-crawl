@@ -1,5 +1,6 @@
 import type { Page } from 'playwright';
 import type { RawFinding, Box } from './types.js';
+import { primeSelectors } from './locate.js';
 
 export interface LayoutAuditOptions {
   viewport?: { width: number; height: number; label?: string };
@@ -53,8 +54,19 @@ export async function auditPageLayout(
   route: string,
   options: LayoutAuditOptions = {},
 ): Promise<RawFinding[]> {
+  await primeSelectors(page, [
+    '*',
+    'h1, h2, h3, h4, h5, h6, .lede, blockquote, .hero-title, [data-hero-title]',
+    'p, span, h1, h2, h3, h4, h5, h6, button, a[href], [class*="label"], [class*="badge"]',
+    'main > *, section > *, article > *, body > *, [class*="section"], [class*="intro"], [class*="hero"], [class*="steps"], [class*="grid"]',
+    'main > section, main > article, body > section, .page-shell > section, section.section, [class*="section"]',
+    'section, article, header, footer, .section, [class*="intro"], [class*="card"], [class*="hero"], [class*="steps"], [class*="split"]',
+    'p, h1, h2, h3, h4, h5, h6, span, blockquote, li, .kicker, .eyebrow',
+    'hr, .divider, [class*="divider"], .rule',
+  ]);
   const issues = await page
     .evaluate(() => {
+      const deepAll = ((w: any) => (w.__uicrawlQ || function(s: string){ return Array.prototype.slice.call(document.querySelectorAll(s)); }))(window);
       const findings: {
         kind:
           | 'layout-overlap'
@@ -115,7 +127,7 @@ export async function auditPageLayout(
       if (docW > winW + 3) {
         const overflowAmount = docW - winW;
         // Locate elements exceeding viewport right edge
-        const allVisible = Array.from(document.querySelectorAll('*')) as HTMLElement[];
+        const allVisible = Array.from(deepAll('*')) as HTMLElement[];
         let worstEl: HTMLElement | null = null;
         let maxRight = winW;
         for (const el of allVisible) {
@@ -139,7 +151,7 @@ export async function auditPageLayout(
       const DESCENDERS = /[gjpqyQ]/;
       const ASCENDERS = /[bdfhkl1-9A-Z]/;
       const typographyCandidates = Array.from(
-        document.querySelectorAll('h1, h2, h3, h4, h5, h6, .lede, blockquote, .hero-title, [data-hero-title]'),
+        deepAll('h1, h2, h3, h4, h5, h6, .lede, blockquote, .hero-title, [data-hero-title]'),
       ) as HTMLElement[];
 
       for (let i = 0; i < typographyCandidates.length; i++) {
@@ -208,7 +220,7 @@ export async function auditPageLayout(
       // 3. In-Flow Sibling Collisions Audit
       // Query interactive, card, or content elements
       const candidateElements = Array.from(
-        document.querySelectorAll(
+        deepAll(
           'article, section, header, nav, footer, .card, [class*="card"], [class*="badge"], [class*="item"], button, a[href], [role="button"], span, p, h1, h2, h3, h4, h5, h6',
         ),
       ) as HTMLElement[];
@@ -299,7 +311,7 @@ export async function auditPageLayout(
 
       // 3b. Vertical Sibling Overlap Audit (Major layout blocks colliding)
       const majorBlocks = Array.from(
-        document.querySelectorAll('main > *, section > *, article > *, body > *, [class*="section"], [class*="intro"], [class*="hero"], [class*="steps"], [class*="grid"]'),
+        deepAll('main > *, section > *, article > *, body > *, [class*="section"], [class*="intro"], [class*="hero"], [class*="steps"], [class*="grid"]'),
       ) as HTMLElement[];
 
       for (let i = 0; i < majorBlocks.length; i++) {
@@ -333,7 +345,7 @@ export async function auditPageLayout(
 
       // 3c. Container Escape / Child Overflow Audit
       const containers = Array.from(
-        document.querySelectorAll('section, article, header, footer, .section, [class*="intro"], [class*="card"], [class*="hero"], [class*="steps"], [class*="split"]'),
+        deepAll('section, article, header, footer, .section, [class*="intro"], [class*="card"], [class*="hero"], [class*="steps"], [class*="split"]'),
       ) as HTMLElement[];
 
       for (let i = 0; i < containers.length; i++) {
@@ -365,7 +377,7 @@ export async function auditPageLayout(
 
       // 4. Silent Text Clipping Audit
       const clippedCandidates = Array.from(
-        document.querySelectorAll('p, span, h1, h2, h3, h4, h5, h6, button, a[href], [class*="label"], [class*="badge"]'),
+        deepAll('p, span, h1, h2, h3, h4, h5, h6, button, a[href], [class*="label"], [class*="badge"]'),
       ) as HTMLElement[];
 
       for (let i = 0; i < clippedCandidates.length && i < 150; i++) {
@@ -404,7 +416,7 @@ export async function auditPageLayout(
       // 5. Text-Border Collision Audit
       // Detects when leaf text descenders/ink collide with or penetrate a container border
       const textLeafCandidates = Array.from(
-        document.querySelectorAll('p, h1, h2, h3, h4, h5, h6, span, blockquote, li, .kicker, .eyebrow'),
+        deepAll('p, h1, h2, h3, h4, h5, h6, span, blockquote, li, .kicker, .eyebrow'),
       ) as HTMLElement[];
 
       for (let i = 0; i < textLeafCandidates.length && i < 150; i++) {
@@ -459,7 +471,7 @@ export async function auditPageLayout(
       // 6. Vertical Rhythm Drift Audit
       // Checks consecutive top-level semantic sections for erratic spacing swings (e.g. 192px vs 24px)
       const sections = Array.from(
-        document.querySelectorAll('main > section, main > article, body > section, .page-shell > section, section.section, [class*="section"]'),
+        deepAll('main > section, main > article, body > section, .page-shell > section, section.section, [class*="section"]'),
       ) as HTMLElement[];
 
       const visibleSections = sections.filter((s) => isVisible(s) && s.getBoundingClientRect().height > 50 && s.getBoundingClientRect().width > 250);
@@ -534,7 +546,7 @@ export async function auditPageLayout(
         const cRect = containerEl.getBoundingClientRect();
         const contentWidth = cRect.width;
         if (contentWidth > 200 && contentWidth < window.innerWidth - 16) {
-          const dividers = Array.from(document.querySelectorAll('hr, .divider, [class*="divider"], .rule')) as HTMLElement[];
+          const dividers = Array.from(deepAll('hr, .divider, [class*="divider"], .rule')) as HTMLElement[];
           for (const div of dividers) {
             if (!isVisible(div)) continue;
             const dRect = div.getBoundingClientRect();

@@ -1,5 +1,6 @@
 import type { Page } from 'playwright';
 import type { RawFinding } from './types.js';
+import { primeSelectors } from './locate.js';
 
 type StateOptions = {
   viewport?: { width: number; height: number; label?: string };
@@ -11,8 +12,12 @@ type StateOptions = {
  * safe to run against production-like pages.
  */
 export async function auditPageStates(page: Page, route: string, options: StateOptions = {}): Promise<RawFinding[]> {
+  // Stage the pierced element list: ARIA wiring inside a web component is just as real
+  // as in the light DOM, and `querySelectorAll('*')` never sees it.
+  await primeSelectors(page, ['*']);
   const result = await page
     .evaluate(() => {
+      const deepAll = (window as unknown as { __uicrawlQ: (s: string) => Element[] }).__uicrawlQ;
       const visible = (el: Element): boolean => {
         const h = el as HTMLElement;
         const rect = h.getBoundingClientRect();
@@ -41,7 +46,7 @@ export async function auditPageStates(page: Page, route: string, options: StateO
         accessibleName?: string;
       }[] = [];
 
-      const all = Array.from(document.querySelectorAll('*'));
+      const all = deepAll('*');
       all.forEach((el, index) => {
         if (!visible(el)) return;
         const selector = selectorFor(el, index);

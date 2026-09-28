@@ -2,7 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import type { Page, Browser } from 'playwright';
 import { resolveConfig, type CrawlConfig } from './config.js';
-import type { CrawlResult, PageReport, RawFinding, ColorPalette, Box } from './types.js';
+import type { CrawlResult, DetectorFailure, PageReport, RawFinding, ColorPalette, Box } from './types.js';
 import { toRouteTemplate } from './routeTemplate.js';
 import { openSession, closeSession, newPage, buildContext } from './browser.js';
 import { gotoRoute, attachCollectors, dedupeRequests } from './capture.js';
@@ -346,12 +346,37 @@ interface VisitResult {
   rawFindings: RawFinding[];
 }
 
+/**
+ * Run one detector, and record it if it throws.
+ *
+ * Returning the fallback keeps the crawl going, but the failure is reported rather than
+ * swallowed: a detector that dies must not be indistinguishable from a detector that
+ * found nothing, because that turns a tool bug into a false "clean" verdict.
+ */
+async function runDetector<T>(
+  route: string,
+  detector: string,
+  failures: DetectorFailure[],
+  run: () => Promise<T>,
+  fallback: T,
+): Promise<T> {
+  try {
+    return await run();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    failures.push({ route, detector, message });
+    process.stderr.write(`[ui-crawl] detector "${detector}" failed on ${route}: ${message}\n`);
+    return fallback;
+  }
+}
+
 async function executeVisit(
   browser: Browser,
   cfg: import('./config.js').ResolvedConfig,
   gate: PolitenessGate,
   task: VisitTask,
   totalVisits: number,
+  detectorFailures: DetectorFailure[],
 ): Promise<VisitResult> {
   const { index, route, viewport } = task;
   const viewportEvidence: ViewportEvidence = { width: viewport.width, height: viewport.height, label: viewport.label };
@@ -500,7 +525,15 @@ async function executeVisit(
     let textDigest: number | undefined;
     let textLength: number | undefined;
     if (!challenged && !cfg.skipContrast) {
-      const colorAudit = await auditPageColors(page, route).catch(() => ({ rawFindings: [], palette: undefined, textDigest: undefined, textLength: undefined }));
+      const colorAudit = await runDetector(
+        route,
+        'contrast',
+        detectorFailures,
+        () => auditPageColors(page, route),
+        { rawFindings: [], palette: undefined, textDigest: undefined, textLength: undefined } as unknown as Awaited<
+          ReturnType<typeof auditPageColors>
+        >,
+      );
       rawFindings.push(...colorAudit.rawFindings);
       palette = colorAudit.palette;
       textDigest = colorAudit.textDigest;
@@ -508,31 +541,36 @@ async function executeVisit(
     }
 
     if (!challenged && !cfg.skipSpacing) {
-      const spacingFindings = await auditPageSpacing(page, route).catch(() => []);
+      const spacingFindings = await runDetector(route, 'spacing', detectorFailures, () => auditPageSpacing(page, route), []);
       rawFindings.push(...spacingFindings);
     }
 
     if (!challenged && !cfg.skipLayout) {
-      const layoutFindings = await auditPageLayout(page, route, { viewport: viewportEvidence }).catch(() => []);
+      const layoutFindings = await runDetector(
+        route, 'layout', detectorFailures, () => auditPageLayout(page, route, { viewport: viewportEvidence }), []);
       rawFindings.push(...layoutFindings);
-      const tabFindings = await auditTabPanels(page, route).catch(() => []);
+      const tabFindings = await runDetector(route, 'tab-panels', detectorFailures, () => auditTabPanels(page, route), []);
       rawFindings.push(...tabFindings);
     }
 
     if (!challenged && !cfg.skipAffordance) {
-      const affordanceFindings = await auditPageAffordance(page, route, controls).catch(() => []);
+      const affordanceFindings = await runDetector(
+        route, 'affordance', detectorFailures, () => auditPageAffordance(page, route, controls), []);
       rawFindings.push(...affordanceFindings);
     }
 
     if (!challenged && !cfg.skipHitTest && !cfg.skipSpacing) {
-      const hitTestFindings = await auditPageHitTest(page, route, { viewport: viewportEvidence }).catch(() => []);
+      const hitTestFindings = await runDetector(
+        route, 'hit-test', detectorFailures, () => auditPageHitTest(page, route, { viewport: viewportEvidence }), []);
       rawFindings.push(...hitTestFindings);
     }
 
     if (!challenged) {
-      const accessibilityFindings = await auditPageAccessibility(page, route, { viewport: viewportEvidence }).catch(() => []);
+      const accessibilityFindings = await runDetector(
+        route, 'accessibility', detectorFailures, () => auditPageAccessibility(page, route, { viewport: viewportEvidence }), []);
       rawFindings.push(...accessibilityFindings);
-      const stateFindings = await auditPageStates(page, route, { viewport: viewportEvidence }).catch(() => []);
+      const stateFindings = await runDetector(
+        route, 'aria-state', detectorFailures, () => auditPageStates(page, route, { viewport: viewportEvidence }), []);
       rawFindings.push(...stateFindings);
     }
 
@@ -541,7 +579,10 @@ async function executeVisit(
       await page.emulateMedia({ colorScheme: 'dark' }).catch(() => {});
       await page.evaluate(() => document.documentElement.classList.add('dark')).catch(() => {});
       const darkStart = rawFindings.length;
-      const darkAudit = await auditPageColors(page, route).catch(() => ({ rawFindings: [] }));
+      const darkAudit = await runDetector(
+        route, 'dark-contrast', detectorFailures, () => auditPageColors(page, route),
+        { rawFindings: [] } as unknown as Awaited<ReturnType<typeof auditPageColors>>,
+      );
       for (const df of darkAudit.rawFindings) {
         df.kind = 'dark-mode-contrast';
         df.evidence.theme = 'dark';
@@ -720,7 +761,9 @@ export async function crawl(config: CrawlConfig): Promise<CrawlResult> {
 
   const pages: PageReport[] = [];
   const rawFindings: RawFinding[] = [];
+  const detectorFailures: DetectorFailure[] = [];
   let guidancePack: GuidancePack | undefined;
+
 
   try {
     // Site guidance pack (robots/sitemap/llms) — GET-only, fail-soft, before discovery.
@@ -761,7 +804,7 @@ export async function crawl(config: CrawlConfig): Promise<CrawlResult> {
         const task = tasks[taskCursor++];
         if (!task) break;
 
-        const res = await executeVisit(session.browser, cfg, gate, task, totalVisits);
+        const res = await executeVisit(session.browser, cfg, gate, task, totalVisits, detectorFailures);
         visitResults.push(res);
 
         completedCount++;
@@ -805,6 +848,7 @@ export async function crawl(config: CrawlConfig): Promise<CrawlResult> {
   const finishedAt = new Date().toISOString();
   const result: CrawlResult = { baseUrl: cfg.baseUrl, startedAt, finishedAt, pages, findings };
   if (truncated > 0) result.truncated = truncated;
+  if (detectorFailures.length > 0) result.detectorFailures = detectorFailures;
   if (guidancePack) result.guidance = summarizeGuidance(guidancePack);
   if (cfg.networkInventory) result.apiIndex = buildApiIndex(pages);
 

@@ -1,4 +1,4 @@
-import type { Page } from 'playwright';
+import type { BrowserContext, Page } from 'playwright';
 import type { Box, SourceLocation } from './types.js';
 import { SELECTOR, SNAPSHOT_SELECTOR } from './selectors.js';
 
@@ -154,6 +154,64 @@ export async function primeDeepPools(page: Page): Promise<void> {
   } catch {
     /* a page that cannot be primed simply falls back to native pools */
   }
+}
+
+/**
+ * Stage the elements matching `selectors` — through Playwright's engine, so open shadow
+ * roots are included — under `window.__uicrawlSel[selector]`.
+ *
+ * This is the bridge for detectors that run a large in-page script: their element lists
+ * have to be pierced, but element handles cannot be passed into `page.evaluate`. The
+ * selectors are static strings in each detector, so staging them explicitly up front is
+ * both cheap and predictable — no runtime magic. In-page code calls the readers installed
+ * by `installDeepQuery` and falls back to a native query when nothing is staged, so a
+ * detector is never worse off than before.
+ */
+export async function primeSelectors(page: Page, selectors: string[]): Promise<void> {
+  // Defensive on purpose: a stub page (used by the hermetic tests) has no `locator`, and
+  // the in-page readers fall back to a native query anyway. Staging is an enhancement,
+  // never a precondition.
+  if (typeof page?.locator !== 'function') return;
+  if (typeof page.evaluate !== 'function') return;
+  for (const selector of selectors) {
+    await page
+      .locator(selector)
+      .evaluateAll((els, sel: string) => {
+        const w = window as unknown as Record<string, Record<string, Element[]>>;
+        w.__uicrawlSel = w.__uicrawlSel ?? {};
+        w.__uicrawlSel[sel] = els;
+      }, selector)
+      .catch(() => {
+        /* an unmatchable or unsupported selector just leaves the native fallback in play */
+      });
+  }
+}
+
+/**
+ * Install the in-page readers `deepAll` / `deepOne` on every document.
+ *
+ * Added as an init script so the readers exist before any detector runs, and so they
+ * survive navigation (a re-crawl re-primes the staged lists afterwards). Kept dependency
+ * free and anonymous so nothing is injected into the browser world.
+ */
+export async function installDeepQuery(context: BrowserContext): Promise<void> {
+  await context
+    .addInitScript(() => {
+      const w = window as unknown as Record<string, unknown>;
+      w.__uicrawlQ = (sel: string): Element[] => {
+        const staged = (w.__uicrawlSel as Record<string, Element[]> | undefined)?.[sel];
+        if (staged) return staged;
+        return Array.prototype.slice.call(document.querySelectorAll(sel));
+      };
+      w.__uicrawlOne = (sel: string): Element | null => {
+        const staged = (w.__uicrawlSel as Record<string, Element[]> | undefined)?.[sel];
+        if (staged) return staged[0] ?? null;
+        return document.querySelector(sel);
+      };
+    })
+    .catch(() => {
+      /* a context that refuses init scripts still works, just without pierced pools */
+    });
 }
 
 export interface EvidenceTarget {

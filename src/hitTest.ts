@@ -1,11 +1,14 @@
 import type { Page } from 'playwright';
 import type { RawFinding, Box } from './types.js';
 import { SELECTOR } from './selectors.js';
+import { primeSelectors } from './locate.js';
 
 export interface HitTestOptions {
   viewport?: { width: number; height: number; label?: string };
   containerSelector?: string;
 }
+
+const DIALOG_SELECTOR = 'dialog[open], [role="dialog"]';
 
 export function isTouchTargetSmall(w: number, h: number, min = 23.5): boolean {
   return w < min || h < min;
@@ -39,17 +42,21 @@ export async function auditPageHitTest(
   route: string,
   options: HitTestOptions = {},
 ): Promise<RawFinding[]> {
+  // Stage both the control list and the dialog probe: pointer interception inside a web
+  // component is still pointer interception, and a component-hosted modal is still a modal.
+  await primeSelectors(page, [SELECTOR, DIALOG_SELECTOR]);
   const rawResults = await page
     .evaluate(
-      ({ selector, containerSelector }) => {
+      ({ selector, containerSelector, dialogSelector }) => {
+        const deepAll = (window as unknown as { __uicrawlQ: (s: string) => Element[] }).__uicrawlQ;
         const results: RawHitTestResult[] = [];
         const root = containerSelector ? document.querySelector(containerSelector) : document;
         if (!root) return [];
-        const elements = Array.from(root.querySelectorAll(selector));
+        const elements = (root === document ? deepAll(selector) : Array.from(root.querySelectorAll(selector))) as Element[];
         const scrollBefore = { x: window.scrollX, y: window.scrollY };
 
         const openModal = !containerSelector
-          ? document.querySelector('dialog[open], [role="dialog"]:not([aria-hidden="true"])')
+          ? deepAll(dialogSelector)[0] ?? null
           : null;
 
         const isVisible = (el: Element): boolean => {
@@ -152,7 +159,7 @@ export async function auditPageHitTest(
         // later phases (and their screenshots) never depend on audit order.
         window.scrollTo(scrollBefore.x, scrollBefore.y);
         return results;
-    }, { selector: SELECTOR, containerSelector: options.containerSelector })
+    }, { selector: SELECTOR, containerSelector: options.containerSelector, dialogSelector: DIALOG_SELECTOR })
     .catch(() => []);
 
   return rawResults.map((r) => ({

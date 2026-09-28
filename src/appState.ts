@@ -1,8 +1,21 @@
 import type { Page } from 'playwright';
 import type { RawFinding } from './types.js';
+import { primeSelectors } from './locate.js';
 import { auditPageColors } from './colors.js';
 import { auditPageLayout } from './layout.js';
 import { auditPageHitTest } from './hitTest.js';
+
+// Selectors are declared once and used for BOTH the pierced pre-stage and the in-page
+// read, so the two can never drift. The dialog selector deliberately drops the
+// `:not([aria-hidden="true"])` guard for staging (Playwright cannot express it) and
+// applies the visibility check in-page instead, as the original code already did.
+const DIALOG_STAGE =
+  'dialog[open], [role="dialog"], .modal.open, .modal.active, .modal.show, [data-modal-open="true"]';
+const DIALOG_READ =
+  'dialog[open], [role="dialog"]:not([aria-hidden="true"]), .modal.open, .modal.active, .modal.show, [data-modal-open="true"]';
+const TAB_SELECTOR = '[role="tab"], .tab, [data-tab]';
+const INPUT_SELECTOR =
+  'input:not([type="hidden"]):not([type="submit"]):not([type="button"]), textarea, select';
 
 export interface AppStateAuditResult {
   findings: RawFinding[];
@@ -20,9 +33,11 @@ export async function detectOpenModal(page: Page): Promise<{
   isScrollLocked?: boolean;
   isFocusTrapped?: boolean;
 }> {
+  await primeSelectors(page, [DIALOG_STAGE]);
   return page.evaluate(() => {
-    const dialogs = Array.from(
-      document.querySelectorAll('dialog[open], [role="dialog"]:not([aria-hidden="true"]), .modal.open, .modal.active, .modal.show, [data-modal-open="true"]')
+    const deepAll = (window as unknown as { __uicrawlQ: (s: string) => Element[] }).__uicrawlQ;
+    const dialogs = deepAll(
+      "dialog[open], [role=\"dialog\"]:not([aria-hidden=\"true\"]), .modal.open, .modal.active, .modal.show, [data-modal-open=\"true\"]"
     ) as HTMLElement[];
 
     const visibleDialog = dialogs.find((d) => {
@@ -75,7 +90,7 @@ export async function auditOpenModal(
 
   // 1. Audit viewport bounds of the modal
   const bounds = await page.evaluate((selector) => {
-    const el = document.querySelector(selector) as HTMLElement | null;
+    const el = (window as unknown as { __uicrawlOne: (s: string) => Element | null }).__uicrawlOne(selector) as HTMLElement | null;
     if (!el) return null;
     const r = el.getBoundingClientRect();
     const winW = window.innerWidth;
@@ -151,8 +166,10 @@ export async function dismissOpenModal(page: Page): Promise<boolean> {
 export async function auditTabPanels(page: Page, route: string): Promise<RawFinding[]> {
   const findings: RawFinding[] = [];
 
+  await primeSelectors(page, [TAB_SELECTOR]);
   const tabSelectors = await page.evaluate(() => {
-    const tabs = Array.from(document.querySelectorAll('[role="tab"], .tab, [data-tab]')) as HTMLElement[];
+    const deepAll = (window as unknown as { __uicrawlQ: (s: string) => Element[] }).__uicrawlQ;
+    const tabs = deepAll('[role="tab"], .tab, [data-tab]') as HTMLElement[];
     return tabs.map((t, idx) => {
       let sel = t.tagName.toLowerCase();
       if (t.id) sel += `#${t.id}`;
@@ -192,8 +209,12 @@ export async function auditTabPanels(page: Page, route: string): Promise<RawFind
  * can be tested in their valid state.
  */
 export async function autoFillFormInputs(page: Page): Promise<number> {
+  await primeSelectors(page, [INPUT_SELECTOR]);
   return page.evaluate(() => {
-    const inputs = Array.from(document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]), textarea, select')) as (HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement)[];
+    const deepAll = (window as unknown as { __uicrawlQ: (s: string) => Element[] }).__uicrawlQ;
+    const inputs = deepAll(
+      'input:not([type="hidden"]):not([type="submit"]):not([type="button"]), textarea, select'
+    ) as (HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement)[];
     let filled = 0;
 
     for (const el of inputs) {
