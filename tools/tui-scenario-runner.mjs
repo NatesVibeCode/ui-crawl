@@ -3,7 +3,7 @@
 // No shell, model provider, credential, or network proxy is used by this runner.
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmod, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, readdir, realpath, stat, writeFile } from 'node:fs/promises';
 import { userInfo } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -238,7 +238,9 @@ async function selfTest() {
 async function campaign(opts) {
   if (!opts.binary) throw new Error('--binary must name the built aoa CLI executable');
   const sdkRoot = path.resolve(opts.sdk ?? sdkDefault);
-  const fixtureHost = path.resolve(opts['fixture-host'] ?? path.join(sdkRoot, 'tools/tui-scenarios/provider.mjs'));
+  // Node resolves the entry module through symlinks. Match its canonical path
+  // so the fixture's CLI entry guard also works for /tmp worktrees on macOS.
+  const fixtureHost = await realpath(path.resolve(opts['fixture-host'] ?? path.join(sdkRoot, 'tools/tui-scenarios/provider.mjs')));
   const scenarioPath = path.resolve(opts.scenario ?? path.join(here, 'tui-scenarios/aeltum-smoke.json'));
   const scenario = JSON.parse(await readFile(scenarioPath, 'utf8'));
   const fixturePath = path.isAbsolute(scenario.fixture) ? scenario.fixture : path.join(sdkRoot, 'tools/tui-scenarios', scenario.fixture);
