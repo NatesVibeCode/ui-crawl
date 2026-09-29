@@ -1,0 +1,170 @@
+{
+  "name": "Repeated stream fragments and individual tool disclosure",
+  "fixture": "repeated-arguments.json",
+  "terminal": {
+    "cols": 100,
+    "rows": 32
+  },
+  "tools": [
+    "file_write"
+  ],
+  "steps": [
+    {
+      "check": {
+        "options": {
+          "readyText": [
+            "ÆLTUM"
+          ],
+          "timeoutMs": 3000,
+          "requiredText": [
+            "ÆLTUM"
+          ]
+        }
+      }
+    },
+    {
+      "action": {
+        "type": "type",
+        "text": "Write repeat.txt with haha."
+      }
+    },
+    {
+      "observe": {
+        "name": "repeat-stream",
+        "options": {
+          "durationMs": 2500,
+          "intervalMs": 70,
+          "sequence": [
+            {
+              "name": "repeated bytes before execution",
+              "text": "\"content\":\"haha\""
+            },
+            {
+              "name": "settled call",
+              "text": "file_write succeeded"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "awaitObservation": "repeat-stream"
+    },
+    {
+      "check": {
+        "options": {
+          "readyText": [
+            "Repeated fragments preserved: haha.",
+            "file_write succeeded"
+          ],
+          "requiredText": [
+            "Wrote 4 bytes."
+          ],
+          "absentText": [
+            "bytes_written"
+          ],
+          "timeoutMs": 5000
+        }
+      }
+    },
+    {
+      "workspaceAssert": {
+        "path": "repeat.txt",
+        "equals": "haha"
+      }
+    },
+    {
+      "action": {
+        "type": "type",
+        "text": "/calls"
+      }
+    },
+    {
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "check": {
+        "options": {
+          "requiredText": [
+            "TOOL CALLS",
+            "Call ID: repeat-write",
+            "bytes_written",
+            "Ctrl+Y copy original output"
+          ]
+        }
+      }
+    },
+    {
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "check": {
+        "options": {
+          "requiredText": [
+            "conversation details folded",
+            "\"content\":\"haha\""
+          ]
+        }
+      }
+    },
+    {
+      "action": {
+        "type": "press",
+        "key": "Escape"
+      }
+    },
+    {
+      "check": {
+        "options": {
+          "requiredText": [
+            "▸ Details",
+            "Wrote 4 bytes."
+          ],
+          "absentText": [
+            "Arguments:"
+          ]
+        }
+      }
+    },
+    {
+      "action": {
+        "type": "press",
+        "key": "Ctrl+O"
+      }
+    },
+    {
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "action": {
+        "type": "press",
+        "key": "Escape"
+      }
+    },
+    {
+      "check": {
+        "options": {
+          "requiredText": [
+            "Arguments:",
+            "\"content\":\"haha\""
+          ]
+        }
+      }
+    }
+  ]
+}

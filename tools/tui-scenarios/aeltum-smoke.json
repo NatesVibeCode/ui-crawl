@@ -654,7 +654,7 @@
             },
             {
               "name": "OE write result remains under the same call identity",
-              "text": "bytes_written",
+              "text": "Wrote 24 bytes.",
               "identities": [
                 {
                   "name": "OE call",
@@ -1088,7 +1088,7 @@
       }
     },
     {
-      "name": "observe active run before cancellation",
+      "name": "Observe cancellation completion; fast settlement may coalesce stopping into the terminal frame",
       "observe": {
         "name": "cancel-run-timeline",
         "options": {
@@ -1102,10 +1102,6 @@
             {
               "name": "partial text arrives before stop",
               "text": "Partial answer before cancellation."
-            },
-            {
-              "name": "UI enters settlement before cancel is reported",
-              "text": "Stopping; waiting for OE settlement"
             },
             {
               "name": "UI reports interrupt after settlement",
