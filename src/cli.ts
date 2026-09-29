@@ -1,5 +1,6 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, copyFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import * as path from 'node:path';
 import { crawl, type CrawlConfig } from './index.js';
 import { buildAgentPayload, buildFindingsJson, buildFixPlan } from './report.js';
 import { startMcpServer } from './mcp.js';
@@ -7,6 +8,8 @@ import { snapshotUrl, formatSnapshot } from './snapshot.js';
 import { serveStatic, discoverHtmlRoutes, type StaticServer } from './serve.js';
 import { openDatabase, getDiff, getRunHistory, getDefectRoutes, hasRun, getRunResult } from './db.js';
 import { UiSession, SessionRegistry, type SessionAction } from './session.js';
+import { TuiSession } from './tuiSession.js';
+import { auditTui } from './tuiAudit.js';
 import type { ActionState } from './session.js';
 
 /**
@@ -85,25 +88,34 @@ async function runScriptedSession(
   }
   if (!Array.isArray(steps)) return fail('--steps must be a JSON array of actions');
 
+  const tuiTarget = opts.tui ? String(opts.tui) : undefined;
   const staticTarget = opts.dir ? String(opts.dir) : opts.file ? String(opts.file) : undefined;
   const targetUrl = opts.url ? String(opts.url) : opts['base-url'] ? String(opts['base-url']) : undefined;
-  if (!targetUrl && !staticTarget) {
-    return fail('--session requires --url, --base-url, --dir, or --file');
+  if (!targetUrl && !staticTarget && !tuiTarget) {
+    return fail('--session requires --url, --base-url, --dir, --file, or --tui');
   }
 
   const outDir = opts.out ? String(opts.out) : './ui-crawl-out';
   const registry = new SessionRegistry(1);
-  const session = await UiSession.open(
-    { url: targetUrl, dir: staticTarget },
-    {
-      browser: (opts.browser ? String(opts.browser) : 'chromium') as 'chromium' | 'webkit' | 'firefox',
-      outDir,
-      headless: !opts.headed,
-      markedScreenshots: !opts['no-marked'],
-      ...(opts.width ? { width: Number(opts.width) } : {}),
-      ...(opts.height ? { height: Number(opts.height) } : {}),
-    },
-  );
+  const session = tuiTarget
+    ? await TuiSession.open({
+        command: tuiTarget,
+        cols: opts.cols ? Number(opts.cols) : undefined,
+        rows: opts.rows ? Number(opts.rows) : undefined,
+        outDir,
+        markedScreenshots: !opts['no-marked'],
+      })
+    : await UiSession.open(
+        { url: targetUrl, dir: staticTarget },
+        {
+          browser: (opts.browser ? String(opts.browser) : 'chromium') as 'chromium' | 'webkit' | 'firefox',
+          outDir,
+          headless: !opts.headed,
+          markedScreenshots: !opts['no-marked'],
+          ...(opts.width ? { width: Number(opts.width) } : {}),
+          ...(opts.height ? { height: Number(opts.height) } : {}),
+        },
+      );
   registry.add(session);
 
   const transcript: Array<{ action: string; result: ActionState }> = [];
@@ -118,7 +130,7 @@ async function runScriptedSession(
         snapshotMode === 'full' || snapshotMode === 'changed' || snapshotMode === 'none'
           ? { snapshot: snapshotMode }
           : {};
-      const result = await session.act(action, snapshotOpt);
+      const result = await session.act(action as any, snapshotOpt);
       transcript.push({ action: result.action, result });
       process.stderr.write(
         `[ui-crawl] ${result.action} -> ${result.verdict}${result.error ? ` (${result.error})` : ''}\n`,
@@ -227,6 +239,34 @@ const RETIRED: Record<string, string> = {
 async function runCli(argv: string[]): Promise<number> {
   const { opts, positional } = parseFlags(argv);
 
+  if (opts.help || opts.h) {
+    process.stdout.write(`ui-crawl — agent-native UI inspection instrument
+
+Usage:
+  ui-crawl --base-url <url> [options]
+  ui-crawl --dir <path> [options]
+  ui-crawl --file <path> [options]
+  ui-crawl --config <path>
+
+Options:
+  --routes <r1,r2>        Comma-separated routes to audit
+  --dir <path>            Serve and audit a static directory
+  --file <path>           Audit a single HTML file
+  --base-url <url>        Base URL of a running server
+  --out <dir>             Output directory (default: ./ui-crawl-out)
+  --plan [runId]          Emit ordered fix plan from stored run
+  --diff [runId]          Compare current run against baseline
+  --history               List stored audit runs
+  --defects-only          Filter out taste questions from output
+  --theme-sweep           Capture both light and dark mode snapshots
+  --crops                 Capture visual crops for defects
+  --mcp                   Run as an MCP server
+  --tui                   Audit or interact with a terminal UI
+  --help, -h              Show this help message
+\n`);
+    return EXIT_OK;
+  }
+
   for (const [flag, reason] of Object.entries(RETIRED)) {
     if (opts[flag]) return fail(`--${flag} was removed. ${reason}`);
   }
@@ -247,7 +287,7 @@ async function runCli(argv: string[]): Promise<number> {
     const stored = getRunResult(db, runId);
     if (!stored) return fail(`--plan: no run with id "${runId}" — check ui-crawl --history for real ids.`);
     const plan = buildFixPlan(
-      { baseUrl: stored.baseUrl, startedAt: '', finishedAt: '', pages: stored.pages, findings: stored.findings, runId },
+      { baseUrl: stored.baseUrl, startedAt: '', finishedAt: '', pages: stored.pages, findings: stored.findings, runId, detectorFailures: stored.detectorFailures },
       getDiff(db, runId) ?? undefined,
     );
     // Plans are for machines: the inline base64 is the payload, the file path is a handle.
@@ -282,6 +322,61 @@ async function runCli(argv: string[]): Promise<number> {
     }
     process.stdout.write(JSON.stringify(diffRes, null, 2) + '\n');
     return EXIT_OK;
+  }
+
+  if (opts.tui) {
+    if (opts.snapshot) {
+      const session = await TuiSession.open({
+        command: String(opts.tui),
+        cols: opts.cols ? Number(opts.cols) : undefined,
+        rows: opts.rows ? Number(opts.rows) : undefined,
+        outDir: opts.out ? String(opts.out) : undefined,
+      });
+      try {
+        const controls = await session.snapshot(opts.cap ? Number(opts.cap) : undefined);
+        process.stdout.write(
+          (opts.json ? JSON.stringify(controls, null, 2) : session.formatSnapshot(controls, 'full')) + '\n',
+        );
+        return EXIT_OK;
+      } finally {
+        await session.close();
+      }
+    }
+
+    if (opts.shot) {
+      const outPath = String(opts.shot);
+      const session = await TuiSession.open({
+        command: String(opts.tui),
+        cols: opts.cols ? Number(opts.cols) : undefined,
+        rows: opts.rows ? Number(opts.rows) : undefined,
+        outDir: opts.out ? String(opts.out) : undefined,
+      });
+      try {
+        const rel = await session.screenshot(!opts['no-marked']);
+        const abs = session.screenshotPath(rel);
+        if (path.resolve(outPath) !== abs) {
+          await copyFile(abs, outPath);
+        }
+        process.stdout.write(
+          JSON.stringify({ shot: outPath, tui: opts.tui, cols: opts.cols ?? 80, rows: opts.rows ?? 24 }) + '\n',
+        );
+        return EXIT_OK;
+      } finally {
+        await session.close();
+      }
+    }
+
+    // Default --tui invocation: batch audit
+    const payload = await auditTui({
+      command: String(opts.tui),
+      cols: opts.cols ? Number(opts.cols) : undefined,
+      rows: opts.rows ? Number(opts.rows) : undefined,
+      outDir: opts.out ? String(opts.out) : undefined,
+      settleMs: opts['settle-ms'] ? Number(opts['settle-ms']) : undefined,
+      probeControls: !opts['no-clicks'],
+    });
+    process.stdout.write(JSON.stringify(payload, null, 2) + '\n');
+    return payload.summary.defects > 0 ? EXIT_DEFECTS : EXIT_OK;
   }
 
   if (opts.shot) return runShot(opts, positional);

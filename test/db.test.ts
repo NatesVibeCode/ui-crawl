@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { openDatabase, saveRun, getDiff, getRunHistory, getFindingById } from '../src/db.js';
+import { openDatabase, saveRun, getDiff, getRunHistory, getFindingById, getRunResult } from '../src/db.js';
 import type { CrawlResult } from '../src/types.js';
 
 describe('SQLite run tracking & differential engine', () => {
@@ -284,5 +284,39 @@ describe('schema migration', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('persists and rehydrates detectorFailures', () => {
+    const db = openDatabase(':memory:');
+    const result: CrawlResult = {
+      baseUrl: 'http://localhost:3000',
+      startedAt: '2026-06-21T00:00:00.000Z',
+      finishedAt: '2026-06-21T00:01:00.000Z',
+      pages: [
+        {
+          route: '/',
+          template: '/',
+          status: 200,
+          consoleErrors: [],
+          failedRequests: [],
+          controlCount: 1,
+        },
+      ],
+      findings: [],
+      detectorFailures: [
+        { route: '/', detector: 'colors', message: 'SyntaxError: Unexpected token' },
+      ],
+    };
+
+    const runId = saveRun(db, result);
+    const rehydrated = getRunResult(db, runId);
+    expect(rehydrated).not.toBeNull();
+    expect(rehydrated?.detectorFailures).toBeDefined();
+    expect(rehydrated?.detectorFailures).toHaveLength(1);
+    expect(rehydrated?.detectorFailures?.[0]).toEqual({
+      route: '/',
+      detector: 'colors',
+      message: 'SyntaxError: Unexpected token',
+    });
   });
 });

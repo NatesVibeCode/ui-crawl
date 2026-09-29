@@ -4,7 +4,7 @@ import type { DatabaseSync } from 'node:sqlite';
 
 const require = createRequire(import.meta.url);
 const { DatabaseSync: DatabaseSyncClass } = require('node:sqlite');
-import type { CrawlResult, Finding, DiffResult, Severity, Bucket, FindingType, PageReport } from './types.js';
+import type { CrawlResult, Finding, DiffResult, Severity, Bucket, FindingType, PageReport, DetectorFailure } from './types.js';
 
 export interface RunRecord {
   id: string;
@@ -194,7 +194,13 @@ export function saveRun(
     defects,
     taste,
     result.pages.length,
-    JSON.stringify({ defects, taste, pages: result.pages.length, truncated: result.truncated ?? 0 }),
+    JSON.stringify({
+      defects,
+      taste,
+      pages: result.pages.length,
+      truncated: result.truncated ?? 0,
+      detectorFailures: result.detectorFailures ?? [],
+    }),
     // Only the artifact references a plan needs, not the whole page report.
     JSON.stringify(
       result.pages.map((p) => ({
@@ -418,14 +424,26 @@ export function getDefectRoutes(db: DatabaseSync, runId: string): string[] {
 export function getRunResult(
   db: DatabaseSync,
   runId: string,
-): { findings: Finding[]; pages: PageReport[]; verdict: string; baseUrl: string; outDir: string } | null {
+): { findings: Finding[]; pages: PageReport[]; verdict: string; baseUrl: string; outDir: string; detectorFailures?: DetectorFailure[] } | null {
   const run = db.prepare('SELECT * FROM runs WHERE id = ?').get(runId) as
-    | { base_url: string; verdict: string; routes_json: string; pages_json: string | null; out_dir: string | null }
+    | { base_url: string; verdict: string; routes_json: string; pages_json: string | null; out_dir: string | null; summary_json?: string }
     | undefined;
   if (!run) return null;
 
   const findingRows = db.prepare('SELECT * FROM findings WHERE run_id = ?').all(runId) as unknown as RawDbFinding[];
   const routes = (JSON.parse(run.routes_json || '[]') as string[]) ?? [];
+
+  let detectorFailures: DetectorFailure[] = [];
+  if (run.summary_json) {
+    try {
+      const summary = JSON.parse(run.summary_json) as { detectorFailures?: DetectorFailure[] };
+      if (Array.isArray(summary.detectorFailures)) {
+        detectorFailures = summary.detectorFailures;
+      }
+    } catch {
+      detectorFailures = [];
+    }
+  }
 
   let pages: PageReport[] = [];
   if (run.pages_json) {
@@ -465,6 +483,7 @@ export function getRunResult(
     verdict: run.verdict,
     baseUrl: run.base_url,
     outDir: run.out_dir ?? './ui-crawl-out',
+    detectorFailures,
   };
 }
 

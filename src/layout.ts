@@ -66,7 +66,7 @@ export async function auditPageLayout(
   ]);
   const issues = await page
     .evaluate(() => {
-      const deepAll = ((w: any) => (w.__uicrawlQ || function(s: string){ return Array.prototype.slice.call(document.querySelectorAll(s)); }))(window);
+      const deepAll = ((w: any) => (w.__uicrawlQ || function(s: string){ return Array.from(document.querySelectorAll(s)); }))(window);
       const findings: {
         kind:
           | 'layout-overlap'
@@ -475,11 +475,15 @@ export async function auditPageLayout(
       ) as HTMLElement[];
 
       const visibleSections = sections.filter((s) => isVisible(s) && s.getBoundingClientRect().height > 50 && s.getBoundingClientRect().width > 250);
-      if (visibleSections.length >= 3) {
+      const topSections = visibleSections
+        .filter((s) => !visibleSections.some((other) => other !== s && other.contains(s)))
+        .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+
+      if (topSections.length >= 3) {
         const gaps: { index: number; gap: number; el: HTMLElement }[] = [];
-        for (let i = 0; i < visibleSections.length - 1; i++) {
-          const a = visibleSections[i];
-          const b = visibleSections[i + 1];
+        for (let i = 0; i < topSections.length - 1; i++) {
+          const a = topSections[i];
+          const b = topSections[i + 1];
           const rA = a.getBoundingClientRect();
           const rB = b.getBoundingClientRect();
           const gap = Math.round(rB.top - rA.bottom);
@@ -509,7 +513,10 @@ export async function auditPageLayout(
 
       // 7. Viewport Scale Imbalance Audit (Above the fold heading proportion)
       const winH = window.innerHeight;
-      const primaryH1 = document.querySelector('h1') as HTMLElement | null;
+      const d1 = ((x: unknown) =>
+        (x as { __uicrawlDeepOne?: (s: string) => HTMLElement | null }).__uicrawlDeepOne
+        || ((s: string) => document.querySelector(s) as HTMLElement | null))(window);
+      const primaryH1 = d1('h1');
       if (primaryH1 && isVisible(primaryH1)) {
         const h1Rect = primaryH1.getBoundingClientRect();
         if (h1Rect.top < winH) {
@@ -541,7 +548,7 @@ export async function auditPageLayout(
 
       // 8. Unanchored Divider Bleed Audit
       // Checks divider lines that break out of the content grid without full-bleed semantics
-      const containerEl = document.querySelector('.container, [class*="container"]') as HTMLElement | null;
+      const containerEl = d1('.container, [class*="container"]');
       if (containerEl && isVisible(containerEl)) {
         const cRect = containerEl.getBoundingClientRect();
         const contentWidth = cRect.width;
@@ -570,11 +577,11 @@ export async function auditPageLayout(
 
       // 9. Adjacent Wordmark Echo Audit
       // Checks if header brand wordmark repeats verbatim in the immediately adjacent hero kicker
-      const wordmarkEl = document.querySelector('header .wordmark, header [class*="brand"], header [class*="logo"], header a:first-child') as HTMLElement | null;
+      const wordmarkEl = d1('header .wordmark, header [class*="brand"], header [class*="logo"], header a:first-child');
       if (wordmarkEl && isVisible(wordmarkEl)) {
         const brandText = textOf(wordmarkEl).trim();
         if (brandText.length >= 3) {
-          const heroSub = document.querySelector('.hero .kicker, .hero .eyebrow, .hero-copy .kicker, main .kicker') as HTMLElement | null;
+          const heroSub = d1('.hero .kicker, .hero .eyebrow, .hero-copy .kicker, main .kicker');
           if (heroSub && isVisible(heroSub)) {
             const subText = textOf(heroSub).trim();
             const wRect = wordmarkEl.getBoundingClientRect();

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isChallengePage, challengeSeverity } from '../src/challenge.js';
+import { isChallengePage, challengeSeverity, isChallengeSubresource } from '../src/challenge.js';
 
 describe('isChallengePage', () => {
   it('detects Cloudflare "Just a moment" by title/body alone (even 200)', () => {
@@ -59,5 +59,26 @@ describe('challengeSeverity', () => {
     expect(challengeSeverity(503)).toBe('high');
     expect(challengeSeverity(429)).toBe('medium');
     expect(challengeSeverity(null)).toBe('medium');
+  });
+});
+
+describe('isChallengeSubresource', () => {
+  it('identifies Cloudflare Turnstile attestation endpoints', () => {
+    expect(
+      isChallengeSubresource(
+        'https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/b/turnstile/f/av0/rch/bfea8/0x4AAAAAAE_d_M_uyUkLDBHg/dark/fbE/new/normal?lang=auto',
+      ),
+    ).toBe(true);
+  });
+
+  it('identifies challenge-platform paths', () => {
+    expect(
+      isChallengeSubresource('https://example.com/cdn-cgi/challenge-platform/h/g/orchestrate'),
+    ).toBe(true);
+  });
+
+  it('does not flag normal assets', () => {
+    expect(isChallengeSubresource('https://example.com/assets/app.js')).toBe(false);
+    expect(isChallengeSubresource('http://localhost:3000/styles.css')).toBe(false);
   });
 });

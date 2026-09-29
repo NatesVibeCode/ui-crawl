@@ -12,8 +12,16 @@ import { auditPageStates } from './state.js';
 import { zoomPass } from './zoom.js';
 import { discoverRoutes, planSeedList } from './discover.js';
 import { fetchGuidance, guidanceArtifacts, type GuidancePack } from './guidance.js';
-import { isChallengePage, challengeSeverity } from './challenge.js';
-import { auditPageColors, contrastRatio, relativeLuminance, parseColor } from './colors.js';
+import { isChallengePage, challengeSeverity, isChallengeSubresource } from './challenge.js';
+import { auditPageColors, contrastRatio, relativeLuminance, parseColor, type ColorAuditResult } from './colors.js';
+import { setDetectorErrorHandler, reportDetectorFailure } from './detectorErrors.js';
+
+const EMPTY_COLOR_AUDIT: ColorAuditResult = {
+  rawFindings: [],
+  palette: undefined,
+  textDigest: undefined,
+  textLength: undefined,
+};
 import { auditPageSpacing, edgeDistance } from './spacing.js';
 import { auditPageAffordance } from './affordance.js';
 import { auditPageLayout, boxIntersection } from './layout.js';
@@ -55,7 +63,7 @@ export { buildSnapshot, formatSnapshot, relocateControl, markControls } from './
 export { auditPageAccessibility } from './accessibility.js';
 export { auditPageStates } from './state.js';
 export { SELECTOR, SNAPSHOT_SELECTOR } from './selectors.js';
-export { isChallengePage, challengeSeverity } from './challenge.js';
+export { isChallengePage, challengeSeverity, isChallengeSubresource } from './challenge.js';
 export {
   fetchGuidance,
   guidanceArtifacts,
@@ -98,12 +106,34 @@ export {
   UiSession,
   SessionRegistry,
   describeAction,
+  type AnySession,
   type SessionAction,
   type SnapshotMode,
   type SessionOptions,
   type SessionTarget,
   type ActionState,
 } from './session.js';
+export {
+  TuiSession,
+  keyToAnsi,
+  describeTuiAction,
+  type TuiSessionOptions,
+  type TuiAction,
+} from './tuiSession.js';
+export {
+  TuiBuffer,
+  type TuiCell,
+  type TuiControl,
+  type TuiContrastFinding,
+} from './tuiBuffer.js';
+export {
+  TuiProcess,
+  type TuiProcessOptions,
+} from './tuiProcess.js';
+export {
+  auditTui,
+  type TuiAuditOptions,
+} from './tuiAudit.js';
 export { resolveEvidence, selectorCandidates, type EvidenceTarget } from './locate.js';
 export { getDefectRoutes, hasRun } from './db.js';
 
@@ -452,7 +482,10 @@ async function executeVisit(
 
     let controls: Awaited<ReturnType<typeof enumerateControls>> = [];
     if (!challenged) {
-      controls = await enumerateControls(page).catch(() => []);
+      controls = await enumerateControls(page).catch((err: unknown) => {
+        reportDetectorFailure(route, 'enumerate-controls', err instanceof Error ? err.message : String(err));
+        return [];
+      });
     }
 
     // Stage pierced element pools once, early, so every later phase (accessibility
@@ -465,7 +498,10 @@ async function executeVisit(
     // and always alongside — never instead of — the clean screenshot.
     let markedShot: string | undefined;
     if (!challenged && cfg.captureCrops) {
-      const marks = await markControls(page).catch(() => null);
+      const marks = await markControls(page).catch((err: unknown) => {
+        reportDetectorFailure(route, 'mark-controls', err instanceof Error ? err.message : String(err));
+        return null;
+      });
       if (marks && marks.count > 0) {
         try {
           markedShot = await shoot(page, cfg.outDir, `${artifactSlug}@marked`);
@@ -508,7 +544,7 @@ async function executeVisit(
       }
       const dedupedFailed = dedupeRequests(collectors.failedRequests);
       for (const fr of dedupedFailed) {
-        if (fr.url === url) continue;
+        if (fr.url === url || isChallengeSubresource(fr.url)) continue;
         rawFindings.push({
           route,
           kind: 'broken-asset',
@@ -530,9 +566,7 @@ async function executeVisit(
         'contrast',
         detectorFailures,
         () => auditPageColors(page, route),
-        { rawFindings: [], palette: undefined, textDigest: undefined, textLength: undefined } as unknown as Awaited<
-          ReturnType<typeof auditPageColors>
-        >,
+        EMPTY_COLOR_AUDIT,
       );
       rawFindings.push(...colorAudit.rawFindings);
       palette = colorAudit.palette;
@@ -581,7 +615,7 @@ async function executeVisit(
       const darkStart = rawFindings.length;
       const darkAudit = await runDetector(
         route, 'dark-contrast', detectorFailures, () => auditPageColors(page, route),
-        { rawFindings: [] } as unknown as Awaited<ReturnType<typeof auditPageColors>>,
+        EMPTY_COLOR_AUDIT,
       );
       for (const df of darkAudit.rawFindings) {
         df.kind = 'dark-mode-contrast';
@@ -634,7 +668,10 @@ async function executeVisit(
     let probedControls: number | undefined;
     let skippedControls: number | undefined;
     if (!challenged && !cfg.skipInteractionSweep) {
-      await autoFillFormInputs(page).catch(() => 0);
+      await autoFillFormInputs(page).catch((err: unknown) => {
+        reportDetectorFailure(route, 'auto-fill-form', err instanceof Error ? err.message : String(err));
+        return 0;
+      });
       const sweep = await sweepControls(page, route, url, controls, cfg, () => gate.pace(url));
       rawFindings.push(...sweep.findings);
       probedControls = sweep.probed;
@@ -762,6 +799,13 @@ export async function crawl(config: CrawlConfig): Promise<CrawlResult> {
   const pages: PageReport[] = [];
   const rawFindings: RawFinding[] = [];
   const detectorFailures: DetectorFailure[] = [];
+  // Plumbing outside `runDetector` (modal detection, control enumeration, badge marking,
+  // form auto-fill) reports here too, so a crash there is never indistinguishable from
+  // "nothing to report".
+  setDetectorErrorHandler((route, detector, message) => {
+    detectorFailures.push({ route, detector, message });
+    process.stderr.write(`[ui-crawl] ${detector} failed on ${route || '(unknown route)'}: ${message}\n`);
+  });
   let guidancePack: GuidancePack | undefined;
 
 
@@ -846,6 +890,7 @@ export async function crawl(config: CrawlConfig): Promise<CrawlResult> {
   const { findings, truncated } = capFindings(triaged, cfg.maxFindingsPerPage);
 
   const finishedAt = new Date().toISOString();
+  setDetectorErrorHandler(null);
   const result: CrawlResult = { baseUrl: cfg.baseUrl, startedAt, finishedAt, pages, findings };
   if (truncated > 0) result.truncated = truncated;
   if (detectorFailures.length > 0) result.detectorFailures = detectorFailures;

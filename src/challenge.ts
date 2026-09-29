@@ -50,3 +50,19 @@ export function challengeSeverity(status: number | null): 'high' | 'medium' {
   if (status === 403 || status === 503) return 'high';
   return 'medium';
 }
+
+/**
+ * True for known bot-challenge verification and attestation subresources (e.g. Cloudflare
+ * Turnstile attestation endpoints) that intentionally reject headless automated browsers.
+ */
+export function isChallengeSubresource(urlStr: string): boolean {
+  try {
+    const parsed = new URL(urlStr);
+    return (
+      parsed.hostname === 'challenges.cloudflare.com' ||
+      parsed.pathname.includes('/cdn-cgi/challenge-platform/')
+    );
+  } catch {
+    return false;
+  }
+}
