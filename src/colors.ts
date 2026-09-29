@@ -279,7 +279,10 @@ export async function verifyContrastFixes(
             layers.push(parsed);
             if (parsed.a >= 1) break;
           }
-          curr = curr.parentElement;
+          // Cross the shadow boundary: `parentElement` stops at the root, so a component's
+          // own background was never walked and the fix was measured against the wrong bg.
+          const rn = curr.getRootNode() as unknown as { host?: Element | null };
+          curr = curr.parentElement ?? rn?.host ?? null;
         }
         if (!layers.length || layers[layers.length - 1].a < 1) {
           const rootParsed = parse(window.getComputedStyle(document.documentElement).backgroundColor);
@@ -292,7 +295,10 @@ export async function verifyContrastFixes(
       };
 
       return list.map((item) => {
-        const el = document.querySelector(item.selector) as HTMLElement | null;
+        const d1 = ((x: unknown) =>
+          (x as { __uicrawlDeepOne?: (s: string) => HTMLElement | null }).__uicrawlDeepOne
+          || ((s: string) => document.querySelector(s) as HTMLElement | null))(window);
+        const el = d1(item.selector);
         if (!el) {
           return {
             selector: item.selector,
@@ -389,10 +395,17 @@ export interface ContrastSample {
 }
 
 /** In-browser evaluation querying visible text and extracting computed colors and palette. */
+export interface ColorAuditResult {
+  rawFindings: RawFinding[];
+  palette?: ColorPalette;
+  textDigest?: number;
+  textLength?: number;
+}
+
 export async function auditPageColors(
   page: Page,
   route: string,
-): Promise<{ rawFindings: RawFinding[]; palette: ColorPalette; textDigest: number; textLength: number }> {
+): Promise<ColorAuditResult> {
   // Pass as a string to guarantee tsx/esbuild does not inject `__name` helpers into the browser context.
   await primeSelectors(page, ['h1, h2, h3, h4, h5, h6, p, a, button, [role="button"], label, th, td, li, span, code, pre']);
   const script = `(() => {
@@ -496,7 +509,7 @@ export async function auditPageColors(
     var textCounts = new Map();
     var accentCounts = new Map();
 
-    var deepAll = (window.__uicrawlQ || function(s){ return Array.prototype.slice.call(document.querySelectorAll(s)); });
+    var deepAll = (window.__uicrawlQ || function(s){ return Array.from(document.querySelectorAll(s)); });
     var textEls = Array.from(
       deepAll('h1, h2, h3, h4, h5, h6, p, a, button, [role="button"], label, th, td, li, span, code, pre')
     );
