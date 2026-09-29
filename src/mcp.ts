@@ -291,6 +291,7 @@ export const MCP_TOOLS = [
       type: 'object', properties: {
         sessionId: { type: 'string' },
         readyText: { type: 'array', items: { type: 'string' }, description: 'Text that must appear before measurement' },
+        readyAbsentText: { type: 'array', items: { type: 'string' }, description: 'Loading markers that must disappear before measurement' },
         timeoutMs: { type: 'integer', minimum: 0, maximum: 10000 },
         requiredText: { type: 'array', items: { type: 'string' } },
         absentText: { type: 'array', items: { type: 'string' } },

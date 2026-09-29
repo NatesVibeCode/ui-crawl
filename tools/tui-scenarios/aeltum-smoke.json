@@ -306,7 +306,7 @@
       "check": {
         "options": {
           "readyText": [
-            "aeltum-fixture"
+            "/model [search]"
           ],
           "requiredText": [
             "/model [search]",
@@ -317,7 +317,11 @@
               "name": "active model id",
               "value": "aeltum-fixture"
             }
-          ]
+          ],
+          "readyAbsentText": [
+            "Loading provider models"
+          ],
+          "timeoutMs": 3000
         }
       }
     },

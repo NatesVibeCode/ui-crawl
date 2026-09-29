@@ -62,6 +62,16 @@ describe('explicit terminal checks and observations', () => {
     } finally { await session.close(); }
   });
 
+  it('waits for loading to disappear without treating an old footer as readiness', async () => {
+    const session = await launch("import os,time\nos.write(1,b'Footer active model\\nLoading catalog')\ntime.sleep(.3)\nos.write(1,b'\\x1b[2;1H\\x1b[2KCatalog complete')\ntime.sleep(2)");
+    try {
+      const result = await checkTui(session, { readyText: ['Footer active model'], readyAbsentText: ['Loading catalog'], requiredText: ['Catalog complete'], timeoutMs: 1000 });
+      expect(result.ready).toBe(true);
+      expect(result.passed).toBe(true);
+      expect(result.presentReadyAbsentText).toEqual([]);
+    } finally { await session.close(); }
+  });
+
   it('records partial content before completion, excluding the spinner region', async () => {
     const session = await launch("import os,time\nos.write(1,b'Ready')\ntime.sleep(.3)\nos.write(1,b'\x1b[2;1HChecking files')\ntime.sleep(.2)\nos.write(1,b'\x1b[3;1HRunning file_read')\ntime.sleep(.2)\nos.write(1,b'\x1b[4;1HDone')\ntime.sleep(2)");
     try {

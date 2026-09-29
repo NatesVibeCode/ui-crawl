@@ -5,6 +5,8 @@ import { measureTuiSpacing, validateTextList, validateTerminalRect, validateTuiS
 export interface TuiCheckOptions {
   /** Readiness is separate from the assertions: do not wait for broken spacing to pass. */
   readyText?: string[];
+  /** Loading markers that must disappear before assertions are measured. */
+  readyAbsentText?: string[];
   timeoutMs?: number;
   requiredText?: string[];
   absentText?: string[];
@@ -41,7 +43,7 @@ function milliseconds(n: number, label: string, min: number, max: number): void 
 
 export function validateTuiCheck(options: TuiCheckOptions): void {
   object(options);
-  for (const key of ['readyText', 'requiredText', 'absentText'] as const) {
+  for (const key of ['readyText', 'readyAbsentText', 'requiredText', 'absentText'] as const) {
     if (options[key] !== undefined) validateTextList(options[key], key);
   }
   if (options.oneOfText !== undefined) {
@@ -106,13 +108,16 @@ export async function checkTui(session: TuiSession, options: TuiCheckOptions) {
   validateTuiCheck(options);
   const started = performance.now();
   const missingReady = () => (options.readyText ?? []).filter(text => !session.rawText.includes(text));
-  while (missingReady().length && !session.exited && performance.now() - started < (options.timeoutMs ?? 3000)) {
+  const presentLoading = () => (options.readyAbsentText ?? []).filter(text => session.rawText.includes(text));
+  while ((missingReady().length || presentLoading().length) && !session.exited && performance.now() - started < (options.timeoutMs ?? 3000)) {
     await pause(Math.min(25, Math.max(1, (options.timeoutMs ?? 3000) - (performance.now() - started))));
   }
   const missingReadyText = missingReady();
+  const presentReadyAbsentText = presentLoading();
   const text = session.rawText;
   const measurements = options.spacing ? measureTuiSpacing(session.screenBuffer, options.spacing) : [];
   const violations = missingReadyText.map(value => `readiness text missing: ${value}`);
+  violations.push(...presentReadyAbsentText.map(value => `loading marker still present: ${value}`));
   for (const value of options.requiredText ?? []) if (!text.includes(value)) violations.push(`required text missing: ${value}`);
   for (const value of options.absentText ?? []) if (text.includes(value)) violations.push(`unexpected text present: ${value}`);
   for (const assertion of options.oneOfText ?? []) if (!assertion.values.some(value => text.includes(value))) violations.push(`${assertion.name}: none of the accepted text appeared (${assertion.values.join(' | ')})`);
@@ -124,7 +129,7 @@ export async function checkTui(session: TuiSession, options: TuiCheckOptions) {
   let screenshot: string | undefined;
   try { screenshot = await session.screenshot(false); }
   catch (error) { violations.push(`screenshot failed: ${error instanceof Error ? error.message : String(error)}`); }
-  return { kind: 'tui-check' as const, passed: violations.length === 0, ready: !missingReadyText.length, missingReadyText, viewport, exitCode, text, measurements, violations, screenshot };
+  return { kind: 'tui-check' as const, passed: violations.length === 0, ready: !missingReadyText.length && !presentReadyAbsentText.length, missingReadyText, presentReadyAbsentText, viewport, exitCode, text, measurements, violations, screenshot };
 }
 
 /** Sample visible text over time; raw repaint/cursor counts do not prove streaming.
