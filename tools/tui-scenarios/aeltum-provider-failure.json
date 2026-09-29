@@ -1,0 +1,25 @@
+{
+  "name": "ÆLTUM provider transport failure remains visible",
+  "fixture": "provider-failure.json",
+  "terminal": { "cols": 100, "rows": 32 },
+  "tools": ["file_read", "file_write"],
+  "steps": [
+    { "name": "wait for app frame", "check": { "options": { "readyText": ["ÆLTUM"], "requiredText": ["ÆLTUM"] } } },
+    {
+      "name": "observe typed provider error",
+      "observe": { "name": "provider-error", "options": { "durationMs": 3500, "intervalMs": 25, "sequence": [
+        { "name": "provider failure is visible", "text": "deterministic fixture provider failure" }
+      ] } }
+    },
+    { "name": "enter failure trigger", "action": { "type": "type", "text": "Trigger the fixture provider failure." } },
+    { "name": "submit failure trigger", "action": { "type": "press", "key": "Enter" } },
+    { "name": "fixture returned scripted 503", "waitForFixture": { "index": 0, "status": "failed", "timeoutMs": 2500 } },
+    { "name": "finish provider error timeline", "awaitObservation": "provider-error" },
+    {
+      "name": "UI retains useful failure detail and stays distinct from success",
+      "check": { "options": { "readyText": ["deterministic fixture provider failure"], "requiredText": ["deterministic fixture provider failure"], "absentText": ["FIXTURE_FINAL_SUCCESS"] } }
+    },
+    { "name": "provider failure used one local request only", "fixtureAssert": { "requestCount": 1, "noViolations": true, "requests": [{ "index": 0, "id": "provider-http-failure", "status": "failed" }] } },
+    { "name": "close failure scenario", "close": true }
+  ]
+}

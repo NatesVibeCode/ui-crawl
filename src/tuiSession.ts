@@ -414,7 +414,7 @@ export function keyToAnsi(key: string): string {
   const k = base.toLowerCase();
   const arrows: Record<string, string> = { arrowup: 'A', up: 'A', arrowdown: 'B', down: 'B', arrowright: 'C', right: 'C', arrowleft: 'D', left: 'D', home: 'H', end: 'F' };
   if (arrows[k]) return modifier === 1 ? `\x1b[${arrows[k]}` : `\x1b[1;${modifier}${arrows[k]}`;
-  const navigation: Record<string, number> = { pageup: 5, pagedown: 6, insert: 2, delete: 3 };
+  const navigation: Record<string, number> = { pageup: 5, pgup: 5, pagedown: 6, pgdown: 6, insert: 2, delete: 3 };
   if (navigation[k]) return `\x1b[${navigation[k]}${modifier === 1 ? '' : `;${modifier}`}~`;
   if (k === 'tab' && shift && modifier === 2) return '\x1b[Z';
   if (ctrl) {

@@ -1,0 +1,25 @@
+{
+  "name": "ÆLTUM cancellation settles the held local stream",
+  "fixture": "cancel-hold.json",
+  "terminal": { "cols": 100, "rows": 32 },
+  "tools": ["file_read", "file_write"],
+  "steps": [
+    { "name": "wait for app frame", "check": { "options": { "readyText": ["ÆLTUM"], "requiredText": ["ÆLTUM"] } } },
+    {
+      "name": "observe partial content before cancellation",
+      "observe": { "name": "cancel-timeline", "options": { "durationMs": 4000, "intervalMs": 25, "sequence": [
+        { "name": "reasoning is visible", "text": "This fixture remains active until interrupted." },
+        { "name": "partial answer is visible", "text": "Partial answer before cancellation." }
+      ] } }
+    },
+    { "name": "type cancel trigger", "action": { "type": "type", "text": "Hold the current request until canceled." } },
+    { "name": "submit cancel trigger", "action": { "type": "press", "key": "Enter" } },
+    { "name": "wait until fixture stream is held", "waitForFixture": { "index": 0, "status": ["held", "streaming"], "timeoutMs": 3000 } },
+    { "name": "cancel with Escape", "action": { "type": "press", "key": "Escape" } },
+    { "name": "finish cancellation timeline", "awaitObservation": "cancel-timeline" },
+    { "name": "server sees disconnected active request", "waitForFixture": { "index": 0, "status": "disconnected", "timeoutMs": 2500 } },
+    { "name": "screen distinguishes interruption from completion", "check": { "options": { "requiredText": ["interrupted"], "absentText": ["FIXTURE_FINAL_SUCCESS"] } } },
+    { "name": "cancel scenario did not issue another request", "fixtureAssert": { "requestCount": 1, "noViolations": true, "requests": [{ "index": 0, "id": "cancel-active-run", "status": "disconnected" }] } },
+    { "name": "close cancel scenario", "close": true }
+  ]
+}

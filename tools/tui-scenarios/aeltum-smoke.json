@@ -1,0 +1,1481 @@
+{
+  "name": "ÆLTUM deterministic real-PTY feature campaign",
+  "fixture": "core-cycle.json",
+  "terminal": {
+    "cols": 100,
+    "rows": 32
+  },
+  "interactionTimeoutMs": 100,
+  "tools": [
+    "file_read",
+    "file_write"
+  ],
+  "workspaceFiles": {
+    "note.txt": "FIXTURE_CONTENT_WINTER_TIDE\nThe safe harbor marker is a blue lantern.\n"
+  },
+  "steps": [
+    {
+      "name": "startup readiness and composer spacing",
+      "check": {
+        "options": {
+          "readyText": [
+            "ÆLTUM"
+          ],
+          "requiredText": [
+            "ÆLTUM"
+          ],
+          "timeoutMs": 3000,
+          "spacing": [
+            {
+              "name": "composer",
+              "bounds": {
+                "row": 24,
+                "col": 0,
+                "rows": 5,
+                "cols": 100
+              },
+              "minRows": 3,
+              "minPadding": {
+                "top": 1,
+                "right": 1,
+                "bottom": 1,
+                "left": 1
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "open slash menu",
+      "action": {
+        "type": "type",
+        "text": "/"
+      }
+    },
+    {
+      "name": "wait for slash menu",
+      "waitMs": 150
+    },
+    {
+      "name": "slash menu lists safe local controls",
+      "check": {
+        "options": {
+          "requiredText": [
+            "Commands",
+            "/model",
+            "/effort",
+            "/settings",
+            "/tools"
+          ]
+        }
+      }
+    },
+    {
+      "name": "dismiss slash menu",
+      "action": {
+        "type": "press",
+        "key": "Escape"
+      }
+    },
+    {
+      "name": "consume slash draft and open keyboard help",
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "name": "help identifies slash commands and scrolling controls",
+      "check": {
+        "options": {
+          "requiredText": [
+            "SLASH COMMANDS",
+            "Ctrl+Up/Down scroll",
+            "Ctrl+PgUp/PgDown"
+          ]
+        }
+      }
+    },
+    {
+      "name": "scroll help one page",
+      "action": {
+        "type": "press",
+        "key": "Ctrl+PageDown"
+      }
+    },
+    {
+      "name": "scroll help second page",
+      "action": {
+        "type": "press",
+        "key": "Ctrl+PageDown"
+      }
+    },
+    {
+      "name": "help exposes integrated lifecycle and display command contracts",
+      "check": {
+        "options": {
+          "oneOfText": [
+            {
+              "name": "sessions command",
+              "values": [
+                "/sessions"
+              ]
+            },
+            {
+              "name": "resume command",
+              "values": [
+                "/resume"
+              ]
+            },
+            {
+              "name": "fork command",
+              "values": [
+                "/fork"
+              ]
+            },
+            {
+              "name": "copy command",
+              "values": [
+                "/copy"
+              ]
+            },
+            {
+              "name": "export command",
+              "values": [
+                "/export"
+              ]
+            },
+            {
+              "name": "search command",
+              "values": [
+                "/search"
+              ]
+            },
+            {
+              "name": "status command",
+              "values": [
+                "/status"
+              ]
+            },
+            {
+              "name": "reasoning display command",
+              "values": [
+                "/thinking"
+              ]
+            },
+            {
+              "name": "tool detail command",
+              "values": [
+                "/details"
+              ]
+            },
+            {
+              "name": "trace display command",
+              "values": [
+                "/trace"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "close help",
+      "action": {
+        "type": "press",
+        "key": "Escape"
+      }
+    },
+    {
+      "name": "open effort picker",
+      "action": {
+        "type": "type",
+        "text": "/effort"
+      }
+    },
+    {
+      "name": "close effort choice menu",
+      "action": {
+        "type": "press",
+        "key": "Escape"
+      }
+    },
+    {
+      "name": "enter effort picker",
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "name": "effort is separate from reasoning display",
+      "check": {
+        "options": {
+          "requiredText": [
+            "REASONING EFFORT",
+            "Current:"
+          ]
+        }
+      }
+    },
+    {
+      "name": "close effort picker",
+      "action": {
+        "type": "press",
+        "key": "Escape"
+      }
+    },
+    {
+      "name": "open deployment settings",
+      "action": {
+        "type": "type",
+        "text": "/settings"
+      }
+    },
+    {
+      "name": "show deployment settings",
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "name": "settings view renders",
+      "check": {
+        "options": {
+          "requiredText": [
+            "SETTINGS"
+          ]
+        }
+      }
+    },
+    {
+      "name": "close settings",
+      "action": {
+        "type": "press",
+        "key": "Escape"
+      }
+    },
+    {
+      "name": "open projected tools",
+      "action": {
+        "type": "type",
+        "text": "/tools"
+      }
+    },
+    {
+      "name": "show projected tools",
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "name": "OE projection shows only fixture read and write tools",
+      "check": {
+        "options": {
+          "requiredText": [
+            "TOOLS",
+            "file_read",
+            "file_write"
+          ]
+        }
+      }
+    },
+    {
+      "name": "close tools",
+      "action": {
+        "type": "press",
+        "key": "Escape"
+      }
+    },
+    {
+      "name": "open provider model picker",
+      "action": {
+        "type": "type",
+        "text": "/model"
+      }
+    },
+    {
+      "name": "wait for local fixture catalog",
+      "waitMs": 200
+    },
+    {
+      "name": "model menu retains the exact active route identity",
+      "check": {
+        "options": {
+          "readyText": [
+            "aeltum-fixture"
+          ],
+          "requiredText": [
+            "/model [search]",
+            "ÆLTUM deterministic fixture"
+          ],
+          "identities": [
+            {
+              "name": "active model id",
+              "value": "aeltum-fixture"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "close model command menu",
+      "action": {
+        "type": "press",
+        "key": "Escape"
+      }
+    },
+    {
+      "name": "enter full model picker",
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "name": "full model picker exposes the exact selected model identity",
+      "check": {
+        "options": {
+          "readyText": [
+            "CHOOSE A MODEL"
+          ],
+          "requiredText": [
+            "CHOOSE A MODEL",
+            "ÆLTUM deterministic fixture"
+          ],
+          "identities": [
+            {
+              "name": "selected model id",
+              "value": "aeltum-fixture"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "close full model picker",
+      "action": {
+        "type": "press",
+        "key": "Escape"
+      }
+    },
+    {
+      "name": "menus and catalog browsing made no model request",
+      "fixtureAssert": {
+        "requestCount": 0,
+        "catalogRequestsAtLeast": 1,
+        "noViolations": true
+      }
+    },
+    {
+      "name": "observe default reasoning and partial assistant content",
+      "observe": {
+        "name": "read-reasoning-content-timeline",
+        "options": {
+          "durationMs": 8000,
+          "intervalMs": 25,
+          "sequence": [
+            {
+              "name": "provider reasoning starts",
+              "text": "I will inspect the requested"
+            },
+            {
+              "name": "provider reasoning advances",
+              "text": "fixture note before answering."
+            },
+            {
+              "name": "partial assistant text",
+              "text": "Checking the fixture file.",
+              "absentText": [
+                "The note says"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "observe exact read-call identity and OE output",
+      "observe": {
+        "name": "read-call-output-timeline",
+        "options": {
+          "durationMs": 8000,
+          "intervalMs": 25,
+          "sequence": [
+            {
+              "name": "OE call identity appears",
+              "text": "Call ID: tui-call-read-001",
+              "identities": [
+                {
+                  "name": "OE call",
+                  "value": "tui-call-read-001"
+                }
+              ]
+            },
+            {
+              "name": "OE output remains under the same call identity",
+              "text": "FIXTURE_CONTENT_WINTER_TIDE",
+              "identities": [
+                {
+                  "name": "OE call",
+                  "value": "tui-call-read-001"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "observe streamed file arguments before completion",
+      "observe": {
+        "name": "read-arguments-preview",
+        "options": {
+          "durationMs": 8000,
+          "intervalMs": 25,
+          "sequence": [
+            {
+              "name": "partial file path is visible before the answer",
+              "text": "note.txt",
+              "absentText": [
+                "The note says"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "type first user request",
+      "action": {
+        "type": "type",
+        "text": "Read the fixture note and mention its marker."
+      }
+    },
+    {
+      "name": "submit first user request",
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "name": "first provider stream is active",
+      "waitForFixture": {
+        "index": 0,
+        "status": [
+          "streaming",
+          "complete"
+        ],
+        "timeoutMs": 3000
+      }
+    },
+    {
+      "name": "type a second draft while busy",
+      "action": {
+        "type": "type",
+        "text": "Summarize the note in five words."
+      }
+    },
+    {
+      "name": "press Enter while first turn is active",
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "name": "busy input is explicit and preserves the draft",
+      "check": {
+        "options": {
+          "readyText": [
+            "Summarize the note in five words."
+          ],
+          "requiredText": [
+            "Summarize the note in five words."
+          ],
+          "oneOfText": [
+            {
+              "name": "busy turn disposition",
+              "values": [
+                "queued",
+                "Queued",
+                "not sent",
+                "Not sent",
+                "not-sent",
+                "Not sent; draft preserved"
+              ]
+            },
+            {
+              "name": "visible progress while busy",
+              "values": [
+                "Working",
+                "Thinking",
+                "Responding",
+                "Preparing tool",
+                "Running tool"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "finish reasoning-content timeline",
+      "awaitObservation": "read-reasoning-content-timeline"
+    },
+    {
+      "name": "finish read-call identity/output timeline",
+      "awaitObservation": "read-call-output-timeline"
+    },
+    {
+      "name": "finish read-argument preview",
+      "awaitObservation": "read-arguments-preview"
+    },
+    {
+      "name": "read turn final content and tool receipt are visible",
+      "check": {
+        "options": {
+          "readyText": [
+            "The note says"
+          ],
+          "requiredText": [
+            "The note says",
+            "FIXTURE_CONTENT_WINTER_TIDE"
+          ]
+        }
+      }
+    },
+    {
+      "name": "send preserved or queued second turn exactly once",
+      "ensureFixtureRequest": {
+        "index": 2,
+        "waitMs": 250,
+        "fallback": [
+          {
+            "type": "press",
+            "key": "Enter"
+          }
+        ]
+      }
+    },
+    {
+      "name": "multi-turn request includes prior history",
+      "waitForFixture": {
+        "index": 2,
+        "status": [
+          "streaming",
+          "complete"
+        ],
+        "timeoutMs": 4000
+      }
+    },
+    {
+      "name": "observe streamed second turn",
+      "observe": {
+        "name": "second-turn-live-timeline",
+        "options": {
+          "durationMs": 3000,
+          "intervalMs": 25,
+          "sequence": [
+            {
+              "name": "first answer fragment",
+              "text": "Winter tide,"
+            },
+            {
+              "name": "second answer fragment",
+              "text": "blue lantern, safe harbor."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "finish second-turn timeline",
+      "awaitObservation": "second-turn-live-timeline"
+    },
+    {
+      "name": "multi-turn answer is visible",
+      "check": {
+        "options": {
+          "readyText": [
+            "blue lantern"
+          ],
+          "requiredText": [
+            "Winter tide",
+            "blue lantern"
+          ]
+        }
+      }
+    },
+    {
+      "name": "observe the write argument preview before completion",
+      "observe": {
+        "name": "write-argument-preview",
+        "options": {
+          "durationMs": 5000,
+          "intervalMs": 25,
+          "sequence": [
+            {
+              "name": "model supplied content is visible before the OE result",
+              "text": "OE_WROTE_FIXTURE_REPORT",
+              "absentText": [
+                "Created report.txt"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "observe write-call identity and result detail",
+      "observe": {
+        "name": "write-call-output-timeline",
+        "options": {
+          "durationMs": 5000,
+          "intervalMs": 25,
+          "sequence": [
+            {
+              "name": "OE write call identity appears",
+              "text": "Call ID: tui-call-write-003",
+              "identities": [
+                {
+                  "name": "OE call",
+                  "value": "tui-call-write-003"
+                }
+              ]
+            },
+            {
+              "name": "OE write result remains under the same call identity",
+              "text": "bytes_written",
+              "identities": [
+                {
+                  "name": "OE call",
+                  "value": "tui-call-write-003"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "type safe write request",
+      "action": {
+        "type": "type",
+        "text": "Write report.txt with the marker from the note."
+      }
+    },
+    {
+      "name": "submit safe write request",
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "name": "OE write call started",
+      "waitForFixture": {
+        "index": 3,
+        "status": [
+          "streaming",
+          "complete"
+        ],
+        "timeoutMs": 4000
+      }
+    },
+    {
+      "name": "finish write-argument preview",
+      "awaitObservation": "write-argument-preview"
+    },
+    {
+      "name": "finish write-call identity/output timeline",
+      "awaitObservation": "write-call-output-timeline"
+    },
+    {
+      "name": "OE wrote only the known workspace fixture file",
+      "workspaceAssert": {
+        "files": {
+          "report.txt": {
+            "contains": "OE_WROTE_FIXTURE_REPORT"
+          }
+        }
+      }
+    },
+    {
+      "name": "write completion is visible",
+      "check": {
+        "options": {
+          "readyText": [
+            "Created report.txt"
+          ],
+          "requiredText": [
+            "Created report.txt"
+          ]
+        }
+      }
+    },
+    {
+      "name": "scroll older transcript into view",
+      "action": {
+        "type": "press",
+        "key": "Ctrl+PageUp"
+      }
+    },
+    {
+      "name": "transcript scroll preserves first input",
+      "check": {
+        "options": {
+          "requiredText": [
+            "Read the fixture note"
+          ]
+        }
+      }
+    },
+    {
+      "name": "scroll back to latest",
+      "action": {
+        "type": "press",
+        "key": "Ctrl+PageDown"
+      }
+    },
+    {
+      "name": "observe missing-file failure under its exact OE call",
+      "observe": {
+        "name": "missing-file-timeline",
+        "options": {
+          "durationMs": 5500,
+          "intervalMs": 25,
+          "sequence": [
+            {
+              "name": "failed tool call identity is visible",
+              "text": "Call ID: tui-call-missing-002",
+              "identities": [
+                {
+                  "name": "OE call",
+                  "value": "tui-call-missing-002"
+                }
+              ]
+            },
+            {
+              "name": "failed-before-effect receipt remains attached to the same call",
+              "text": "failed_before_effect",
+              "identities": [
+                {
+                  "name": "OE call",
+                  "value": "tui-call-missing-002"
+                }
+              ]
+            },
+            {
+              "name": "model describes the failed operation",
+              "text": "The OE read failed safely"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "request safe missing-file read",
+      "action": {
+        "type": "type",
+        "text": "Read missing.txt and report the failure."
+      }
+    },
+    {
+      "name": "submit safe missing-file read",
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "name": "missing-file operation reaches provider continuation",
+      "waitForFixture": {
+        "index": 5,
+        "status": [
+          "streaming",
+          "complete"
+        ],
+        "timeoutMs": 4000
+      }
+    },
+    {
+      "name": "finish missing-file timeline",
+      "awaitObservation": "missing-file-timeline"
+    },
+    {
+      "name": "failed OE call leaves useful detail accessible",
+      "check": {
+        "options": {
+          "readyText": [
+            "The OE read failed safely"
+          ],
+          "requiredText": [
+            "The OE read failed safely",
+            "missing.txt"
+          ]
+        }
+      }
+    },
+    {
+      "name": "read and write tool calls settled under exact fixture ids",
+      "fixtureAssert": {
+        "requestCount": 7,
+        "noViolations": true,
+        "requests": [
+          {
+            "index": 0,
+            "id": "read-note-command-stream",
+            "status": "complete"
+          },
+          {
+            "index": 1,
+            "id": "read-note-tool-continuation",
+            "status": "complete"
+          },
+          {
+            "index": 2,
+            "id": "multi-turn-history",
+            "status": "complete"
+          },
+          {
+            "index": 3,
+            "id": "write-report-command",
+            "status": "complete"
+          },
+          {
+            "index": 4,
+            "id": "write-report-outcome",
+            "status": "complete"
+          },
+          {
+            "index": 5,
+            "id": "missing-file-command",
+            "status": "complete"
+          },
+          {
+            "index": 6,
+            "id": "missing-file-outcome",
+            "status": "complete"
+          }
+        ]
+      }
+    },
+    {
+      "name": "resize to narrow terminal",
+      "action": {
+        "type": "resize",
+        "cols": 60,
+        "rows": 20
+      }
+    },
+    {
+      "name": "narrow view keeps composer padding and bounded gap",
+      "check": {
+        "options": {
+          "readyText": [
+            "ÆLTUM"
+          ],
+          "requiredText": [
+            "ÆLTUM"
+          ],
+          "spacing": [
+            {
+              "name": "narrow composer",
+              "bounds": {
+                "row": 12,
+                "col": 0,
+                "rows": 5,
+                "cols": 60
+              },
+              "minRows": 3,
+              "minPadding": {
+                "top": 1,
+                "right": 1,
+                "bottom": 1,
+                "left": 1
+              },
+              "minGapBefore": 1,
+              "maxGapBefore": 8
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "restore campaign viewport",
+      "action": {
+        "type": "resize",
+        "cols": 100,
+        "rows": 32
+      }
+    },
+    {
+      "name": "hide displayed reasoning",
+      "action": {
+        "type": "type",
+        "text": "/thinking hide"
+      }
+    },
+    {
+      "name": "apply reasoning display setting",
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "name": "hide reasoning without hiding tool and answer detail",
+      "check": {
+        "options": {
+          "requiredText": [
+            "Created report.txt",
+            "The OE read failed safely",
+            "file_read failed",
+            "Call ID: tui-call-missing-002"
+          ],
+          "absentText": [
+            "I will inspect the requested"
+          ]
+        }
+      }
+    },
+    {
+      "name": "reasoning display persisted",
+      "deploymentAssert": {
+        "equals": {
+          "reasoning_display": "hide"
+        }
+      }
+    },
+    {
+      "name": "reasoning display leaves model effort unchanged",
+      "deploymentAssert": {
+        "unchanged": [
+          "effort"
+        ]
+      }
+    },
+    {
+      "name": "show displayed reasoning again",
+      "action": {
+        "type": "type",
+        "text": "/thinking show"
+      }
+    },
+    {
+      "name": "apply visible reasoning setting",
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "name": "restore full tool detail",
+      "action": {
+        "type": "type",
+        "text": "/details full"
+      }
+    },
+    {
+      "name": "apply full tool detail",
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "name": "full tool detail persisted",
+      "deploymentAssert": {
+        "equals": {
+          "reasoning_display": "show",
+          "tool_details": "full"
+        }
+      }
+    },
+    {
+      "name": "show trace display",
+      "action": {
+        "type": "type",
+        "text": "/trace show"
+      }
+    },
+    {
+      "name": "apply trace display",
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "name": "hide trace display",
+      "action": {
+        "type": "type",
+        "text": "/trace hide"
+      }
+    },
+    {
+      "name": "apply hidden trace display",
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "name": "display setting values persisted",
+      "deploymentAssert": {
+        "equals": {
+          "reasoning_display": "show",
+          "tool_details": "full",
+          "trace_display": "hide"
+        }
+      }
+    },
+    {
+      "name": "copy latest answer",
+      "action": {
+        "type": "type",
+        "text": "/copy"
+      }
+    },
+    {
+      "name": "invoke copy command",
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "name": "copied content equals original answer",
+      "clipboardAssert": {
+        "equals": "The OE read failed safely: missing.txt does not exist in this fixture workspace."
+      }
+    },
+    {
+      "name": "export transcript beneath the retained session",
+      "action": {
+        "type": "type",
+        "text": "/export transcript.md"
+      }
+    },
+    {
+      "name": "invoke export command",
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "name": "export preserves source text and tool detail",
+      "sessionAssert": {
+        "files": {
+          "exports/transcript.md": {
+            "containsAll": [
+              "Read the fixture note",
+              "Created report.txt",
+              "file_write — succeeded"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "observe active run before cancellation",
+      "observe": {
+        "name": "cancel-run-timeline",
+        "options": {
+          "durationMs": 4500,
+          "intervalMs": 25,
+          "sequence": [
+            {
+              "name": "active reasoning is visible",
+              "text": "This deterministic response stays active until the UI cancels it."
+            },
+            {
+              "name": "partial text arrives before stop",
+              "text": "Partial answer before cancellation."
+            },
+            {
+              "name": "UI enters settlement before cancel is reported",
+              "text": "Stopping; waiting for OE settlement"
+            },
+            {
+              "name": "UI reports interrupt after settlement",
+              "text": "interrupted"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "start held provider response",
+      "action": {
+        "type": "type",
+        "text": "Hold the current request until I cancel it."
+      }
+    },
+    {
+      "name": "submit held provider response",
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "name": "fixture waits inside active stream",
+      "waitForFixture": {
+        "index": 7,
+        "status": [
+          "held",
+          "streaming"
+        ],
+        "timeoutMs": 3500
+      }
+    },
+    {
+      "name": "type draft before cancellation",
+      "action": {
+        "type": "type",
+        "text": "Keep this draft during cancellation."
+      }
+    },
+    {
+      "name": "press Enter while held response is active",
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "name": "held run preserves busy draft visibly",
+      "check": {
+        "options": {
+          "readyText": [
+            "Keep this draft during cancellation."
+          ],
+          "requiredText": [
+            "Keep this draft during cancellation."
+          ],
+          "oneOfText": [
+            {
+              "name": "busy turn disposition",
+              "values": [
+                "queued",
+                "Queued",
+                "not sent",
+                "Not sent",
+                "not-sent"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "cancel held OE/AOA run",
+      "action": {
+        "type": "press",
+        "key": "Escape"
+      }
+    },
+    {
+      "name": "finish cancellation timeline",
+      "awaitObservation": "cancel-run-timeline"
+    },
+    {
+      "name": "provider observes request cancellation",
+      "waitForFixture": {
+        "index": 7,
+        "status": "disconnected",
+        "timeoutMs": 2500
+      }
+    },
+    {
+      "name": "UI labels cancellation as interrupted",
+      "check": {
+        "options": {
+          "requiredText": [
+            "interrupted"
+          ],
+          "absentText": [
+            "Response completed after cancellation"
+          ]
+        }
+      }
+    },
+    {
+      "name": "close live TUI to test persistence",
+      "close": true
+    },
+    {
+      "name": "reopen same retained session",
+      "reopen": true
+    },
+    {
+      "name": "scroll reopened ledger to latest record",
+      "action": {
+        "type": "press",
+        "key": "Ctrl+PageDown"
+      }
+    },
+    {
+      "name": "reopened transcript reconciles the interrupted run",
+      "check": {
+        "options": {
+          "readyText": [
+            "The OE read failed safely"
+          ],
+          "requiredText": [
+            "The OE read failed safely",
+            "Hold the current request",
+            "Run interrupted"
+          ]
+        }
+      }
+    },
+    {
+      "name": "scroll reopened history back one page",
+      "action": {
+        "type": "press",
+        "key": "Ctrl+PageUp"
+      }
+    },
+    {
+      "name": "reopened history retains the successful write and call identity",
+      "check": {
+        "options": {
+          "requiredText": [
+            "file_write succeeded"
+          ],
+          "identities": [
+            {
+              "name": "reopened OE call",
+              "value": "tui-call-write-003"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "scroll reopened history to earlier read",
+      "action": {
+        "type": "press",
+        "key": "Ctrl+PageUp"
+      }
+    },
+    {
+      "name": "reopened history retains the read result",
+      "check": {
+        "options": {
+          "requiredText": [
+            "The note says",
+            "FIXTURE_CONTENT_WINTER_TIDE"
+          ],
+          "identities": [
+            {
+              "name": "reopened read call",
+              "value": "tui-call-read-001"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "return reopened transcript to latest",
+      "action": {
+        "type": "press",
+        "key": "Ctrl+PageDown"
+      }
+    },
+    {
+      "name": "return latest after second page",
+      "action": {
+        "type": "press",
+        "key": "Ctrl+PageDown"
+      }
+    },
+    {
+      "name": "open sessions panel",
+      "action": {
+        "type": "type",
+        "text": "/sessions"
+      }
+    },
+    {
+      "name": "invoke sessions panel",
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "name": "sessions list is visible",
+      "check": {
+        "options": {
+          "requiredText": [
+            "SESSIONS"
+          ]
+        }
+      }
+    },
+    {
+      "name": "close sessions panel",
+      "action": {
+        "type": "press",
+        "key": "Escape"
+      }
+    },
+    {
+      "name": "open exact session resume panel",
+      "action": {
+        "type": "type",
+        "text": "/resume"
+      }
+    },
+    {
+      "name": "invoke resume panel",
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "name": "resume shows retained session identity",
+      "check": {
+        "options": {
+          "requiredText": [
+            "RESUME"
+          ]
+        }
+      }
+    },
+    {
+      "name": "close resume panel",
+      "action": {
+        "type": "press",
+        "key": "Escape"
+      }
+    },
+    {
+      "name": "search old answer without replacing current draft",
+      "action": {
+        "type": "type",
+        "text": "/search Winter tide"
+      }
+    },
+    {
+      "name": "run local transcript search",
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "name": "search result points at exact older answer",
+      "check": {
+        "options": {
+          "requiredText": [
+            "Winter tide"
+          ]
+        }
+      }
+    },
+    {
+      "name": "close search",
+      "action": {
+        "type": "press",
+        "key": "Escape"
+      }
+    },
+    {
+      "name": "fork conversation with parent identity",
+      "action": {
+        "type": "type",
+        "text": "/fork"
+      }
+    },
+    {
+      "name": "create local conversation fork",
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "name": "page through retained fork context",
+      "action": {
+        "type": "press",
+        "key": "Ctrl+PageDown"
+      }
+    },
+    {
+      "name": "fork previews retained context before mutation",
+      "check": {
+        "options": {
+          "requiredText": [
+            "FORK",
+            "Created report.txt"
+          ]
+        }
+      }
+    },
+    {
+      "name": "final fixture count proves menus and local actions made no inference",
+      "fixtureAssert": {
+        "requestCount": 8,
+        "catalogRequestsAtLeast": 1,
+        "noViolations": true,
+        "requests": [
+          {
+            "index": 0,
+            "id": "read-note-command-stream",
+            "status": "complete"
+          },
+          {
+            "index": 1,
+            "id": "read-note-tool-continuation",
+            "status": "complete"
+          },
+          {
+            "index": 2,
+            "id": "multi-turn-history",
+            "status": "complete"
+          },
+          {
+            "index": 3,
+            "id": "write-report-command",
+            "status": "complete"
+          },
+          {
+            "index": 4,
+            "id": "write-report-outcome",
+            "status": "complete"
+          },
+          {
+            "index": 5,
+            "id": "missing-file-command",
+            "status": "complete"
+          },
+          {
+            "index": 6,
+            "id": "missing-file-outcome",
+            "status": "complete"
+          },
+          {
+            "index": 7,
+            "id": "cancel-active-run",
+            "status": "disconnected"
+          }
+        ]
+      }
+    },
+    {
+      "name": "finish campaign",
+      "close": true
+    }
+  ]
+}

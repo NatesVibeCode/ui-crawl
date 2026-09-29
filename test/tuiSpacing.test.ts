@@ -11,6 +11,14 @@ describe('semantic terminal spacing measurements', () => {
     expect(result.violations).toContain('preceding gap 2 rows > 1');
     expect(() => measureTuiSpacing(b, [{ name: 'reply', bounds: { row: 3, col: 0, rows: 1, cols: 40 }, minGapBefore: 2, maxGapBefore: 1 }])).toThrow('minGapBefore exceeds');
   });
+
+  it('catches a related block with too little separation', () => {
+    const b = new TuiBuffer(40, 12);
+    b.write('> question\x1b[2;1Hanswer');
+    const [result] = measureTuiSpacing(b, [{ name: 'reply', bounds: { row: 1, col: 0, rows: 1, cols: 40 }, minGapBefore: 1 }]);
+    expect(result.passed).toBe(false);
+    expect(result.violations).toContain('preceding gap 0 rows < 1');
+  });
   it('catches a one-row cramped input instead of treating an empty screen as generous padding', () => {
     const b = new TuiBuffer(40, 12);
     b.write('\x1b[8;2H\x1b[48;2;23;29;23m> draft\x1b[0m');

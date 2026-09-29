@@ -1,0 +1,328 @@
+{
+  "name": "ÆLTUM admitted forks and exact resume",
+  "fixture": "conversation-cycle.json",
+  "terminal": {
+    "cols": 110,
+    "rows": 40
+  },
+  "interactionTimeoutMs": 150,
+  "tools": [
+    "file_read",
+    "file_write"
+  ],
+  "steps": [
+    {
+      "name": "startup",
+      "check": {
+        "options": {
+          "readyText": [
+            "ÆLTUM"
+          ],
+          "requiredText": [
+            "ÆLTUM"
+          ],
+          "timeoutMs": 3000
+        }
+      }
+    },
+    {
+      "name": "type Create original.txt with Original retained context.",
+      "action": {
+        "type": "type",
+        "text": "Create original.txt with Original retained context."
+      }
+    },
+    {
+      "name": "submit Create original.txt with Original retained context.",
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "name": "wait for fixture 1",
+      "waitForFixture": {
+        "index": 1,
+        "status": "complete",
+        "timeoutMs": 4000
+      }
+    },
+    {
+      "name": "settled parent",
+      "check": {
+        "options": {
+          "readyText": [
+            "Parent settled answer"
+          ],
+          "requiredText": [
+            "Parent settled answer"
+          ],
+          "timeoutMs": 3000
+        }
+      }
+    },
+    {
+      "name": "type /fork branch",
+      "action": {
+        "type": "type",
+        "text": "/fork branch"
+      }
+    },
+    {
+      "name": "submit /fork branch",
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "name": "wait for child admission",
+      "waitMs": 400
+    },
+    {
+      "name": "inherited child",
+      "check": {
+        "options": {
+          "readyText": [
+            "FORK",
+            "Parent settled answer"
+          ],
+          "requiredText": [
+            "FORK",
+            "Parent settled answer"
+          ],
+          "timeoutMs": 3000
+        }
+      }
+    },
+    {
+      "name": "child has typed inert context",
+      "sessionAssert": {
+        "files": {
+          "forks/branch/run.log/main.log": {
+            "contains": "aoa.fork_context.v1"
+          }
+        }
+      }
+    },
+    {
+      "name": "type Use inherited context without repeating the original tool.",
+      "action": {
+        "type": "type",
+        "text": "Use inherited context without repeating the original tool."
+      }
+    },
+    {
+      "name": "submit Use inherited context without repeating the original tool.",
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "name": "wait for fixture 2",
+      "waitForFixture": {
+        "index": 2,
+        "status": "complete",
+        "timeoutMs": 4000
+      }
+    },
+    {
+      "name": "child answer",
+      "check": {
+        "options": {
+          "readyText": [
+            "Child answer uses inherited context"
+          ],
+          "requiredText": [
+            "Child answer uses inherited context"
+          ],
+          "timeoutMs": 3000
+        }
+      }
+    },
+    {
+      "name": "type /fork second",
+      "action": {
+        "type": "type",
+        "text": "/fork second"
+      }
+    },
+    {
+      "name": "submit /fork second",
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "name": "wait for second child admission",
+      "waitMs": 400
+    },
+    {
+      "name": "second fork",
+      "check": {
+        "options": {
+          "readyText": [
+            "FORK",
+            "Parent settled answer"
+          ],
+          "requiredText": [
+            "FORK",
+            "Parent settled answer"
+          ],
+          "timeoutMs": 3000
+        }
+      }
+    },
+    {
+      "name": "second generation retains original context",
+      "sessionAssert": {
+        "files": {
+          "forks/branch/forks/second/run.log/main.log": {
+            "containsAll": [
+              "aoa.fork_context.v1",
+              "Original retained context"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "type /resume",
+      "action": {
+        "type": "type",
+        "text": "/resume"
+      }
+    },
+    {
+      "name": "submit /resume",
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "name": "resume picker",
+      "check": {
+        "options": {
+          "readyText": [
+            "RESUME"
+          ],
+          "requiredText": [
+            "RESUME"
+          ],
+          "timeoutMs": 3000
+        }
+      }
+    },
+    {
+      "name": "select parent below latest two children",
+      "action": {
+        "type": "press",
+        "key": "ArrowDown"
+      }
+    },
+    {
+      "name": "select original parent",
+      "action": {
+        "type": "press",
+        "key": "ArrowDown"
+      }
+    },
+    {
+      "name": "explicitly admit original parent",
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "name": "wait for resumed custody",
+      "waitMs": 400
+    },
+    {
+      "name": "parent retained answer",
+      "check": {
+        "options": {
+          "readyText": [
+            "Parent settled answer"
+          ],
+          "requiredText": [
+            "Parent settled answer"
+          ],
+          "timeoutMs": 3000
+        }
+      }
+    },
+    {
+      "name": "type Continue the parent without repeating its tools.",
+      "action": {
+        "type": "type",
+        "text": "Continue the parent without repeating its tools."
+      }
+    },
+    {
+      "name": "submit Continue the parent without repeating its tools.",
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "name": "wait for fixture 3",
+      "waitForFixture": {
+        "index": 3,
+        "status": "complete",
+        "timeoutMs": 4000
+      }
+    },
+    {
+      "name": "resumed parent answer",
+      "check": {
+        "options": {
+          "readyText": [
+            "Parent resumed with its original conversation"
+          ],
+          "requiredText": [
+            "Parent resumed with its original conversation"
+          ],
+          "timeoutMs": 3000
+        }
+      }
+    },
+    {
+      "name": "no inference from browsing or forks",
+      "fixtureAssert": {
+        "requestCount": 4,
+        "noViolations": true,
+        "requests": [
+          {
+            "index": 2,
+            "id": "child-inert-context",
+            "status": "complete"
+          },
+          {
+            "index": 3,
+            "id": "resumed-parent",
+            "status": "complete"
+          }
+        ]
+      }
+    },
+    {
+      "name": "original effect remains known",
+      "workspaceAssert": {
+        "files": {
+          "original.txt": {
+            "contains": "Original retained context"
+          }
+        }
+      }
+    },
+    {
+      "name": "finish conversation campaign",
+      "close": true
+    }
+  ]
+}

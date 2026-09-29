@@ -146,6 +146,9 @@ describe('TuiProcess and key mapping', () => {
     expect(keyToAnsi('Ctrl+A')).toBe('\x01');
     expect(keyToAnsi('Ctrl+Z')).toBe('\x1a');
     expect(keyToAnsi('Alt+x')).toBe('\x1bx');
+    expect(keyToAnsi('Ctrl+PgUp')).toBe('\x1b[5;5~');
+    expect(keyToAnsi('Ctrl+PgDown')).toBe('\x1b[6;5~');
+    expect(keyToAnsi('Ctrl+PageDown')).toBe('\x1b[6;5~');
   });
 
   it('spawns and receives output from a simple command', async () => {
