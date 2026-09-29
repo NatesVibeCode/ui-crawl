@@ -48,12 +48,16 @@ export interface SessionTarget {
   file?: string;
   /** Path appended to a `dir`/`file` target's served origin, e.g. '/about'. */
   route?: string;
+  /** Local terminal command for TUI evaluation. */
+  tui?: string | string[];
 }
 
 export interface SessionOptions {
   browser?: 'chromium' | 'webkit' | 'firefox';
   width?: number;
   height?: number;
+  cols?: number;
+  rows?: number;
   headless?: boolean;
   /** Where screenshots are written. Defaults to './ui-crawl-out'. */
   outDir?: string;
@@ -639,19 +643,23 @@ export function describeAction(action: SessionAction): string {
   }
 }
 
+import type { TuiSession } from './tuiSession.js';
+
+export type AnySession = UiSession | TuiSession;
+
 /**
  * A bounded set of live sessions.
  *
- * Each session holds a real browser, so an unbounded map would leak processes. The cap is
- * a hard ceiling: opening past it fails loudly rather than evicting a session a caller is
- * still holding an id for.
+ * Each session holds a real browser or terminal process, so an unbounded map would leak
+ * processes. The cap is a hard ceiling: opening past it fails loudly rather than evicting
+ * a session a caller is still holding an id for.
  */
 export class SessionRegistry {
-  private sessions = new Map<string, UiSession>();
+  private sessions = new Map<string, AnySession>();
 
   constructor(private readonly limit = 4) {}
 
-  add(session: UiSession): void {
+  add(session: AnySession): void {
     if (this.sessions.size >= this.limit) {
       throw new Error(
         `ui-crawl: ${this.limit} sessions already open — close one before opening another`,
@@ -660,7 +668,7 @@ export class SessionRegistry {
     this.sessions.set(session.id, session);
   }
 
-  get(id: string): UiSession {
+  get(id: string): AnySession {
     const s = this.sessions.get(id);
     if (!s) throw new Error(`ui-crawl: no open session with id "${id}"`);
     return s;

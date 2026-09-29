@@ -44,6 +44,7 @@ describe('triageRaw — deterministic defect/taste boundary', () => {
     ['viewport-scale-imbalance', 'taste'],
     ['unanchored-divider-bleed', 'taste'],
     ['adjacent-wordmark-echo', 'taste'],
+    ['above-the-fold-vacancy', 'taste'],
   ];
 
   for (const [kind, bucket] of expectations) {
@@ -65,7 +66,7 @@ describe('triageRaw — deterministic defect/taste boundary', () => {
       'clipped-text', 'viewport-overflow', 'pointer-intercepted', 'small-touch-target',
       'dark-mode-contrast', 'container-overflow', 'sibling-overlap', 'text-border-collision',
       'vertical-rhythm-drift', 'viewport-scale-imbalance', 'unanchored-divider-bleed',
-      'adjacent-wordmark-echo',
+      'adjacent-wordmark-echo', 'above-the-fold-vacancy',
     ];
     // low-contrast is bucketed from its measured ratio, not a static rule.
     const expectedMissing = all.filter((t) => !covered.has(t) && t !== 'low-contrast');

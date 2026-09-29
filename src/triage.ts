@@ -209,6 +209,17 @@ const RULES: Record<FindingType, BaseRule> = {
         : 'Header wordmark repeated in adjacent hero subhead';
     },
   },
+  'above-the-fold-vacancy': {
+    bucket: 'taste',
+    severity: 'medium',
+    tags: ['best-practice', 'usability'],
+    title: (r) => {
+      const v = r.evidence.vacancy;
+      return v
+        ? `Excessive above-the-fold void (${v.leadGapPx}px gap, ${Math.round(v.vacancyRatio * 100)}% of viewport height) pushes primary content down: "${r.evidence.selector ?? 'heading'}"`
+        : 'Excessive above-the-fold vacancy before primary content';
+    },
+  },
 };
 
 function pct(z?: number): string {

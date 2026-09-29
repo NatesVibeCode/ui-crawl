@@ -6,10 +6,12 @@ export interface Summary {
   byType: Record<string, number>;
   /** Findings dropped by the per-page cap. Zero means the report is complete. */
   truncated: number;
+  /** Detectors that threw and reported nothing — non-empty means coverage is incomplete. */
+  detectorFailures?: DetectorFailure[];
 }
 
 export function summarize(findings: Finding[]): Summary {
-  const s: Summary = { defects: 0, taste: 0, byType: {}, truncated: 0 };
+  const s: Summary = { defects: 0, taste: 0, byType: {}, truncated: 0, detectorFailures: [] };
   for (const f of findings) {
     if (f.bucket === 'defect') s.defects++;
     else s.taste++;
@@ -208,6 +210,7 @@ export interface FixPlan {
     remainingGroups: number;
     pagesCrawled: number;
     truncated: number;
+    detectorFailures?: DetectorFailure[];
   };
   /** Ordered worst-first. Defects before taste, high severity first. */
   steps: PlanStep[];
@@ -269,18 +272,22 @@ export function buildFixPlan(result: CrawlResult, diff?: DiffResult): FixPlan {
   });
 
   const remainingGroups = steps.length;
+  const failures = payload.summary.detectorFailures ?? [];
   return {
-    done: remainingGroups === 0,
+    done: remainingGroups === 0 && failures.length === 0,
     exitCriteria:
-      remainingGroups === 0
-        ? 'No defect groups remain — this run is done. Taste questions (if any) are decisions for a human or the caller, not defects.'
-        : `${remainingGroups} defect root cause${remainingGroups === 1 ? '' : 's'} remaining. Re-run the audit after each edit; the loop is complete when done is true.`,
+      failures.length > 0
+        ? `${failures.length} detector${failures.length === 1 ? '' : 's'} crashed and reported nothing, so this run's coverage is incomplete — an empty defect list here is NOT a clean bill of health. Re-run after addressing them.`
+        : remainingGroups === 0
+          ? 'No defect groups remain — this run is done. Taste questions (if any) are decisions for a human or the caller, not defects.'
+          : `${remainingGroups} defect root cause${remainingGroups === 1 ? '' : 's'} remaining. Re-run the audit after each edit; the loop is complete when done is true.`,
     summary: {
       defects: payload.summary.defects,
       taste: payload.summary.taste,
       remainingGroups,
       pagesCrawled: payload.summary.pagesCrawled,
       truncated: payload.summary.truncated,
+      detectorFailures: failures,
     },
     steps,
     ...(diff
@@ -432,6 +439,7 @@ export function buildAgentPayload(result: CrawlResult): AgentPayload {
 export function buildFindingsJson(result: CrawlResult): string {
   const sum = summarize(result.findings);
   sum.truncated = result.truncated ?? 0;
+  sum.detectorFailures = result.detectorFailures ?? [];
   return JSON.stringify(
     {
       runId: result.runId,

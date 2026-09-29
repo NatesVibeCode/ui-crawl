@@ -1,6 +1,7 @@
 import type { Page } from 'playwright';
 import type { RawFinding } from './types.js';
 import { primeSelectors } from './locate.js';
+import { reportDetectorFailure } from './detectorErrors.js';
 import { auditPageColors } from './colors.js';
 import { auditPageLayout } from './layout.js';
 import { auditPageHitTest } from './hitTest.js';
@@ -35,7 +36,7 @@ export async function detectOpenModal(page: Page): Promise<{
 }> {
   await primeSelectors(page, [DIALOG_STAGE]);
   return page.evaluate(() => {
-    const deepAll = (window as unknown as { __uicrawlQ: (s: string) => Element[] }).__uicrawlQ;
+    const deepAll = ((w: any) => (w.__uicrawlQ || function(s: string){ return Array.from(document.querySelectorAll(s)); }))(window);
     const dialogs = deepAll(
       "dialog[open], [role=\"dialog\"]:not([aria-hidden=\"true\"]), .modal.open, .modal.active, .modal.show, [data-modal-open=\"true\"]"
     ) as HTMLElement[];
@@ -74,7 +75,12 @@ export async function detectOpenModal(page: Page): Promise<{
       isScrollLocked,
       isFocusTrapped,
     };
-  }).catch(() => ({ isOpen: false }));
+  }).catch((err: unknown) => {
+    // A modal-detection crash must never read as "no modal open" — that is the exact
+    // false-clean this instrument forbids. Record it; the caller decides what to do.
+    reportDetectorFailure('', 'detect-open-modal', err instanceof Error ? err.message : String(err));
+    return { isOpen: false };
+  });
 }
 
 /**
@@ -90,7 +96,7 @@ export async function auditOpenModal(
 
   // 1. Audit viewport bounds of the modal
   const bounds = await page.evaluate((selector) => {
-    const el = (window as unknown as { __uicrawlOne: (s: string) => Element | null }).__uicrawlOne(selector) as HTMLElement | null;
+    const el = ((w: any) => (w.__uicrawlOne || function(s: string){ return document.querySelector(s); }))(window)(selector) as HTMLElement | null;
     if (!el) return null;
     const r = el.getBoundingClientRect();
     const winW = window.innerWidth;
@@ -124,8 +130,14 @@ export async function auditOpenModal(
 
   // 2. Audit contrast and hit test inside modal
   const [colors, hitTest] = await Promise.all([
-    auditPageColors(page, route).catch(() => ({ rawFindings: [] })),
-    auditPageHitTest(page, route, { containerSelector: sel }).catch(() => []),
+    auditPageColors(page, route).catch((err: unknown) => {
+      reportDetectorFailure(route, 'modal-contrast', err instanceof Error ? err.message : String(err));
+      return { rawFindings: [] };
+    }),
+    auditPageHitTest(page, route, { containerSelector: sel }).catch((err: unknown) => {
+      reportDetectorFailure(route, 'modal-hit-test', err instanceof Error ? err.message : String(err));
+      return [];
+    }),
   ]);
 
   findings.push(...colors.rawFindings);
@@ -149,7 +161,9 @@ export async function dismissOpenModal(page: Page): Promise<boolean> {
     // 2. Try close button
     const closeBtn = page.locator('dialog [aria-label*="close" i], dialog button.close, [role="dialog"] [aria-label*="close" i], [role="dialog"] button:has-text("Close"), [role="dialog"] button:has-text("Cancel")').first();
     if (await closeBtn.count() > 0) {
-      await closeBtn.click({ timeout: 1000 }).catch(() => {});
+      await closeBtn.click({ timeout: 1000 }).catch((err: unknown) => {
+        reportDetectorFailure('', 'dismiss-modal', err instanceof Error ? err.message : String(err));
+      });
       await page.waitForTimeout(150);
     }
 
@@ -168,7 +182,7 @@ export async function auditTabPanels(page: Page, route: string): Promise<RawFind
 
   await primeSelectors(page, [TAB_SELECTOR]);
   const tabSelectors = await page.evaluate(() => {
-    const deepAll = (window as unknown as { __uicrawlQ: (s: string) => Element[] }).__uicrawlQ;
+    const deepAll = ((w: any) => (w.__uicrawlQ || function(s: string){ return Array.from(document.querySelectorAll(s)); }))(window);
     const tabs = deepAll('[role="tab"], .tab, [data-tab]') as HTMLElement[];
     return tabs.map((t, idx) => {
       let sel = t.tagName.toLowerCase();
@@ -180,7 +194,10 @@ export async function auditTabPanels(page: Page, route: string): Promise<RawFind
         ariaControls: t.getAttribute('aria-controls') || undefined,
       };
     });
-  }).catch(() => []);
+  }).catch((err: unknown) => {
+    reportDetectorFailure(route, 'tab-panels', err instanceof Error ? err.message : String(err));
+    return [];
+  });
 
   if (tabSelectors.length <= 1) return findings;
 
@@ -211,7 +228,7 @@ export async function auditTabPanels(page: Page, route: string): Promise<RawFind
 export async function autoFillFormInputs(page: Page): Promise<number> {
   await primeSelectors(page, [INPUT_SELECTOR]);
   return page.evaluate(() => {
-    const deepAll = (window as unknown as { __uicrawlQ: (s: string) => Element[] }).__uicrawlQ;
+    const deepAll = ((w: any) => (w.__uicrawlQ || function(s: string){ return Array.from(document.querySelectorAll(s)); }))(window);
     const inputs = deepAll(
       'input:not([type="hidden"]):not([type="submit"]):not([type="button"]), textarea, select'
     ) as (HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement)[];
@@ -258,5 +275,8 @@ export async function autoFillFormInputs(page: Page): Promise<number> {
       }
     }
     return filled;
-  }).catch(() => 0);
+  }).catch((err: unknown) => {
+    reportDetectorFailure('', 'auto-fill-form', err instanceof Error ? err.message : String(err));
+    return 0;
+  });
 }

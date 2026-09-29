@@ -9,6 +9,7 @@ import { serveStatic, discoverHtmlRoutes, type StaticServer } from './serve.js';
 import { openDatabase, getDiff, getRunHistory, getDefectRoutes, hasRun, getRunResult } from './db.js';
 import { UiSession, SessionRegistry, type SessionAction } from './session.js';
 import { TuiSession } from './tuiSession.js';
+import { checkTui, observeTui, validateTuiCheck, validateTuiObserve, type TuiCheckOptions, type TuiObserveOptions } from './tuiCheck.js';
 import { auditTui } from './tuiAudit.js';
 import type { ActionState } from './session.js';
 
@@ -80,13 +81,21 @@ async function runScriptedSession(
   const stepsPath = opts.steps ? String(opts.steps) : undefined;
   if (!stepsPath) return fail('--session requires --steps <file.json>');
 
-  let steps: SessionAction[];
+  let steps: Array<SessionAction | ({ type: 'check' } & TuiCheckOptions) | ({ type: 'observe' } & TuiObserveOptions)>;
   try {
     steps = JSON.parse(await readFile(stepsPath, 'utf8')) as SessionAction[];
   } catch (err) {
     return fail(`--steps: cannot read ${stepsPath}: ${err instanceof Error ? err.message : String(err)}`);
   }
   if (!Array.isArray(steps)) return fail('--steps must be a JSON array of actions');
+  try {
+    for (const step of steps) {
+      if (step?.type === 'check') validateTuiCheck(step);
+      if (step?.type === 'observe') validateTuiObserve(step);
+      if ((step?.type === 'check' || step?.type === 'observe') && !opts.tui) return fail(`${step.type} requires --tui`);
+    }
+  } catch (error) { return fail(error instanceof Error ? error.message : String(error)); }
+  if (opts['tui-check']) return fail('Use check steps inside --session, or --tui-check without --session');
 
   const tuiTarget = opts.tui ? String(opts.tui) : undefined;
   const staticTarget = opts.dir ? String(opts.dir) : opts.file ? String(opts.file) : undefined;
@@ -119,9 +128,18 @@ async function runScriptedSession(
   registry.add(session);
 
   const transcript: Array<{ action: string; result: ActionState }> = [];
+  const checks: unknown[] = [];
+  let failedChecks = 0;
   let defects = 0;
   try {
     for (const step of steps) {
+      if (step.type === 'check' || step.type === 'observe') {
+        if (!(session instanceof TuiSession)) throw new Error(`${step.type} is a terminal-only step`);
+        const result = step.type === 'check' ? await checkTui(session, step) : await observeTui(session, step);
+        checks.push({ step: transcript.length + checks.length, ...result });
+        if (result.passed === false) failedChecks++;
+        continue;
+      }
       // A step may carry a `snapshot` verbosity override alongside its action fields.
       const { snapshot: snapshotMode, ...action } = step as SessionAction & {
         snapshot?: 'full' | 'changed' | 'none';
@@ -156,14 +174,15 @@ async function runScriptedSession(
           ...(t.result.error ? { error: t.result.error } : {}),
           snapshot: t.result.snapshot,
         })),
-        summary: { steps: transcript.length, consoleErrors: defects },
+        checks,
+        summary: { steps: transcript.length + checks.length, consoleErrors: defects, failedChecks },
         outDir,
       },
       null,
       2,
     ) + '\n',
   );
-  return EXIT_OK;
+  return defects || failedChecks || transcript.some(t => !t.result.ok) ? EXIT_DEFECTS : EXIT_OK;
 }
 
 async function runShot(opts: Record<string, string | boolean>, positional: string[]): Promise<number> {
@@ -249,6 +268,9 @@ Usage:
   ui-crawl --config <path>
 
 Options:
+  --tui <cmd>            Launch a terminal app for inspection
+  --tui-check <file.json> Check explicit terminal text and spacing contracts
+  --session --steps <file.json> Replay actions, terminal check/observe steps
   --routes <r1,r2>        Comma-separated routes to audit
   --dir <path>            Serve and audit a static directory
   --file <path>           Audit a single HTML file
@@ -324,7 +346,22 @@ Options:
     return EXIT_OK;
   }
 
+  if (opts['tui-check'] && !opts.tui) return fail('--tui-check requires --tui');
   if (opts.tui) {
+    if (opts['tui-check']) {
+      let spec: TuiCheckOptions;
+      try {
+        spec = JSON.parse(await readFile(String(opts['tui-check']), 'utf8')) as TuiCheckOptions;
+        validateTuiCheck(spec);
+      } catch (error) { return fail(error instanceof Error ? error.message : String(error)); }
+      const session = await TuiSession.open({ command: String(opts.tui), cols: opts.cols ? Number(opts.cols) : undefined,
+        rows: opts.rows ? Number(opts.rows) : undefined, outDir: opts.out ? String(opts.out) : undefined });
+      try {
+        const result = await checkTui(session, spec);
+        process.stdout.write(JSON.stringify(result, null, 2) + '\n');
+        return result.passed ? EXIT_OK : EXIT_DEFECTS;
+      } finally { await session.close(); }
+    }
     if (opts.snapshot) {
       const session = await TuiSession.open({
         command: String(opts.tui),
@@ -373,7 +410,7 @@ Options:
       rows: opts.rows ? Number(opts.rows) : undefined,
       outDir: opts.out ? String(opts.out) : undefined,
       settleMs: opts['settle-ms'] ? Number(opts['settle-ms']) : undefined,
-      probeControls: !opts['no-clicks'],
+      probeControls: opts['probe-controls'] === true && !opts['no-clicks'],
     });
     process.stdout.write(JSON.stringify(payload, null, 2) + '\n');
     return payload.summary.defects > 0 ? EXIT_DEFECTS : EXIT_OK;

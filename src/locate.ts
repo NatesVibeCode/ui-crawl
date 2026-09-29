@@ -208,6 +208,52 @@ export async function installDeepQuery(context: BrowserContext): Promise<void> {
         if (staged) return staged[0] ?? null;
         return document.querySelector(sel);
       };
+      // Piercing walk for arbitrary selectors the staged pools do not cover (contrast
+      // verification, taste lookups, zoom, modal scoping, label association). Descends
+      // into every open shadow root the same way Playwright's engine does, so a finding
+      // inside a web component is measured and photographed instead of silently skipped.
+      w.__uicrawlDeep = (sel: string): Element[] => {
+        const out: Element[] = [];
+        const walk = (root: Document | ShadowRoot): void => {
+          for (const el of Array.from(root.querySelectorAll(sel))) out.push(el);
+          for (const el of Array.from(root.querySelectorAll('*'))) {
+            const sr = (el as unknown as { shadowRoot?: ShadowRoot | null }).shadowRoot;
+            if (sr) walk(sr);
+          }
+        };
+        walk(document);
+        return out;
+      };
+      w.__uicrawlDeepOne = (sel: string): Element | null => {
+        let found: Element | null = null;
+        const walk = (root: Document | ShadowRoot): void => {
+          if (found) return;
+          const hit = root.querySelector(sel);
+          if (hit) {
+            found = hit;
+            return;
+          }
+          for (const el of Array.from(root.querySelectorAll('*'))) {
+            if (found) return;
+            const sr = (el as unknown as { shadowRoot?: ShadowRoot | null }).shadowRoot;
+            if (sr) walk(sr);
+          }
+        };
+        walk(document);
+        return found;
+      };
+      // Containment that crosses shadow boundaries: `Node.contains` stops at the root,
+      // so scoping a hit-test to a modal that hosts a component silently missed it.
+      w.__uicrawlIn = (root: Node, el: Node | null): boolean => {
+        let n: Node | null | undefined = el;
+        while (n) {
+          if (n === root) return true;
+          n = (n as { parentNode?: Node | null }).parentNode
+            ?? (n as { host?: Node | null }).host
+            ?? null;
+        }
+        return false;
+      };
     })
     .catch(() => {
       /* a context that refuses init scripts still works, just without pierced pools */
@@ -248,11 +294,14 @@ export async function scrollTargetIntoView(page: Page, selector: string): Promis
           if (nthForm) {
             const wantTag = nthForm[1].toLowerCase();
             const n = parseInt(nthForm[2], 10);
+            const deep = ((x: unknown) =>
+              (x as { __uicrawlDeep?: (s: string) => Element[] }).__uicrawlDeep
+              || ((s: string) => Array.from(document.querySelectorAll(s))))(window);
             const pools = [
-              Array.from(document.querySelectorAll(args.probe)),
-              Array.from(document.querySelectorAll(args.snapshotProbe)),
-              Array.from(document.querySelectorAll('*')),
-              Array.from(document.images),
+              deep(args.probe),
+              deep(args.snapshotProbe),
+              deep('*'),
+              deep('img'),
             ];
             for (const pool of pools) {
               const cand = pool[n];
@@ -262,7 +311,10 @@ export async function scrollTargetIntoView(page: Page, selector: string): Promis
               }
             }
           } else {
-            el = document.querySelector(args.sel);
+            const d1 = ((x: unknown) =>
+              (x as { __uicrawlDeepOne?: (s: string) => Element | null }).__uicrawlDeepOne
+              || ((s: string) => document.querySelector(s)))(window);
+            el = d1(args.sel) as Element | null;
           }
           if (!el) return null;
           el.scrollIntoView({ block: 'center', inline: 'center' });
@@ -348,11 +400,14 @@ export async function resolveEvidence(page: Page, selector: string): Promise<Evi
             const primed = (window as unknown as Record<string, Record<string, Element[]>>)[
               '__uicrawlPools'
             ];
+            const deepPools = ((x: unknown) =>
+              (x as { __uicrawlDeep?: (s: string) => Element[] }).__uicrawlDeep
+              || ((s: string) => Array.from(document.querySelectorAll(s))))(window);
             const pools: Element[][] = [
-              primed?.probe ?? Array.from(document.querySelectorAll(args.probe)),
-              primed?.snapshot ?? Array.from(document.querySelectorAll(args.snapshotProbe)),
-              primed?.all ?? Array.from(document.querySelectorAll('*')),
-              primed?.images ?? Array.from(document.images),
+              primed?.probe ?? deepPools(args.probe),
+              primed?.snapshot ?? deepPools(args.snapshotProbe),
+              primed?.all ?? deepPools('*'),
+              primed?.images ?? deepPools('img'),
             ];
 
             // A named control is the only disambiguator a caller gave us, so a pool entry
@@ -377,7 +432,10 @@ export async function resolveEvidence(page: Page, selector: string): Promise<Evi
               }
             }
           } else {
-            el = document.querySelector(sel);
+            const d1 = ((x: unknown) =>
+              (x as { __uicrawlDeepOne?: (s: string) => Element | null }).__uicrawlDeepOne
+              || ((s: string) => document.querySelector(s)))(window);
+            el = d1(sel) as Element | null;
           }
 
           if (!el) return null;

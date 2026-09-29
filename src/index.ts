@@ -939,3 +939,7 @@ export async function crawl(config: CrawlConfig): Promise<CrawlResult> {
 
   return result;
 }
+
+export { measureTuiSpacing, type TuiSpacingSpec, type TuiSpacingMeasurement, type TerminalRect, type TerminalPadding } from './tuiSpacing.js';
+
+export { checkTui, observeTui, type TuiCheckOptions, type TuiObserveOptions } from './tuiCheck.js';

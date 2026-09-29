@@ -1,7 +1,6 @@
 {
   "name": "@aidev/ui-crawl",
   "version": "0.2.0",
-  "private": true,
   "description": "Agent-native UI inspection instrument. Crawls a web app for visual, layout, contrast, accessibility, and interaction defects, and exposes a live browser session so an LLM harness can navigate and look. Emits JSON, indexed DOM snapshots, screenshots with source locations, and exact CSS remediations.",
   "type": "module",
   "main": "./dist/index.js",

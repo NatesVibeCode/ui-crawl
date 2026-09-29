@@ -27,7 +27,9 @@ disagree with a bucketing, say so in prose and leave the bucket alone. Never pro
 | Your situation | Use |
 |---|---|
 | "What's broken across this app?" | `ui_audit`, then `ui_fix_plan` |
+| "Evaluate / audit a local TUI or CLI app" | `ui_tui_audit` / `--tui <cmd>` |
 | "Look at this page, click *that*, tell me what changed" | `ui_open` + `ui_act` |
+| "Drive a local TUI step by step (keys, input, click)" | `ui_tui_open` + `ui_tui_act` / `ui_open {tui}` |
 | "Did my change break anything?" | re-run `ui_audit`, then `ui_fix_plan` |
 | A page needs auth | `ui_login` once, pass `storageState` onward |
 | "Which controls exist?" | `ui_snapshot` / `ui_selectors` |
@@ -133,3 +135,87 @@ node bin/ui-crawl.js --login steps.json --login-route /login --dir ./dist
 
 **A full machine contract lives in the repo's `AGENTS.md`.** Read it if you need the exact
 payload schema, every finding type, or the closed-loop remediation procedure.
+
+
+### Terminal interaction guarantees
+
+TUI batch audits are observation-only by default. `probeControls: true` or CLI
+`--probe-controls` explicitly enables real mouse actions and can change application
+state. Terminal controls inferred from text are labeled candidates, not semantic UI
+controls. An indexed action requires a previously returned, still-matching candidate.
+
+`Ctrl` and `Control` key names are accepted, including modified navigation such as
+`Ctrl+PageUp`, `Ctrl+End`, and `Shift+Tab`. Unsupported keys/actions fail explicitly.
+Clicks and wheel events require the application's mouse mode; wheel `dx`/`dy` values
+are terminal wheel steps (up to 100 per action). `fill` targets the focused candidate
+and never adds Enter. `type`/`paste` use bracketed paste when enabled; multiline input
+without that mode is rejected. `write` explicitly sends raw application input.
+
+Resize uses a separate framed PTY control pipe. Snapshots preserve Unicode graphemes
+and terminal cell widths. Screenshots render that cell grid in Playwright; they are
+not native-terminal captures. Each session retains `.ansi` output and `.screen.json`
+state alongside screenshots. Failed screenshots are reported, not silently passed.
+Check expected screen changes to establish task success; `ACTED` alone is insufficient.
+
+### Explicit terminal contracts and temporal evidence
+
+A screenshot, an `ACTED` verdict, or an animated spinner does not prove a usable
+session. Use `ui_tui_check` on an open session for named surface padding and
+visible-content assertions. `readyText` waits for the application frame (not just
+startup escape bytes); measurements run once after readiness, so the tool never
+waits for bad spacing to become a pass. Readiness timeout, missing text, ambiguous
+background rectangles, and screenshot failures are explicit failures. Coordinates
+are zero-based terminal cells. Background selection requires one solid rectangle;
+use explicit `bounds` when the same color paints multiple areas.
+
+CLI: `ui-crawl --tui "aoa" --tui-check contracts.json --cols 80 --rows 24`
+
+```json
+{
+  "readyText": ["ÆLTUM"],
+  "timeoutMs": 3000,
+  "requiredText": ["Enter send"],
+  "spacing": [{
+    "name": "composer", "background": "#171d17", "minRows": 5,
+    "minPadding": {"top": 1, "bottom": 1, "left": 2, "right": 2},
+    "minGapBefore": 1
+  }]
+}
+```
+
+Scripted TUI sessions also accept `{ "type": "check", ...contract }` and
+`{ "type": "observe", ...observation }` steps. Failed explicit checks or failed
+actions exit 1; invalid options exit 2. These contract results are separate from
+heuristic findings and never promote `taste` into `defect`.
+
+`ui_tui_observe` / `observeTui(session, options)` samples changed visible text for
+up to 10 seconds. `bounds` can exclude status spinners. A `sequence` requires
+milestones in different changed samples; `absentText` distinguishes partial output
+from the completed response. The result retains timed frames, missed milestones,
+and evidence truncation. Without a sequence, `passed` is null: observation alone
+is not a successful evaluation. Start observation before the behavior of interest;
+in JS the observation promise can run concurrently with an explicit send action.
+
+```json
+{
+  "durationMs": 4000, "intervalMs": 40,
+  "sequence": [
+    {"name": "progress before completion", "text": "Checking files", "absentText": ["Done"]},
+    {"name": "tool before completion", "text": "Running file_read", "absentText": ["Done"]},
+    {"name": "completed", "text": "Done"}
+  ]
+}
+```
+
+Use application-specific assertions for menu titles, selected rows, exit hints,
+model identity, tool availability, long-history navigation, and draft preservation.
+A zero-tool session cannot prove tool rendering. A static screen cannot prove
+streaming. Provider logs prove execution; temporal screens prove what was visible.
+Clipboard selection/copy and native terminal shortcuts require a native-terminal
+check; PTY screenshots do not prove them. Test copy/export/fork explicitly when
+those features are expected, rather than assuming a chat-looking screen has them.
+No check launches model inference beyond the command/actions the caller supplies.
+
+Use `maxGapBefore` on a named terminal surface to bound excessive blank rows
+between related transcript blocks. It can be combined with `minGapBefore` to
+assert an exact gap; minimums greater than maximums are rejected.

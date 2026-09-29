@@ -554,6 +554,14 @@ describe.skipIf(!LIVE)('shadow DOM: end-to-end audit (live)', () => {
       });
       const payload = buildAgentPayload(result);
       expect(payload.actions.length).toBeGreaterThan(0);
+      // The fixture plants a shadow <img src="x.png"> with no alt and a shadow <button>.
+      // Assert the specific defect types the piercing is supposed to surface, not just
+      // "something" — otherwise a detector silently dropping its shadow findings still
+      // passes as long as one unrelated finding survives.
+      const types = payload.actions.map((a) => a.type);
+      expect(types, `shadow audit finding types: ${types.join(', ')}`).toContain('missing-image-alt');
+      // Coverage is only trustworthy if no detector crashed silently.
+      expect(payload.summary.detectorFailures).toEqual([]);
       for (const action of payload.actions) {
         // Every finding in a shadow root must still be locatable, photographable, and
         // tied to a badge — otherwise the crop would silently be missing.

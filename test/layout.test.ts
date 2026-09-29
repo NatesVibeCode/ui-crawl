@@ -94,11 +94,17 @@ describe('layout: auditPageLayout mapping', () => {
           wordmark: { brandText: 'Æstrum', echoText: 'Æstrum outcome delivery', distancePx: 40 },
           remediation: 'Remove duplicate brand naming for cleaner visual hierarchy.',
         },
+        {
+          kind: 'above-the-fold-vacancy',
+          selector: '.hero .kicker',
+          vacancy: { headerBottomPx: 116, contentTopPx: 307, leadGapPx: 191, viewportHeightPx: 900, vacancyRatio: 0.21, internalOffsetPx: 191 },
+          remediation: 'Reduce hero padding-top or eliminate artificial container min-height.',
+        },
       ]),
     } as unknown as import('playwright').Page;
 
     const findings = await auditPageLayout(mockPage, '/test');
-    expect(findings).toHaveLength(5);
+    expect(findings).toHaveLength(6);
 
     expect(findings[0].kind).toBe('text-border-collision');
     expect(findings[0].evidence.selector).toBe('p.descender');
@@ -118,5 +124,10 @@ describe('layout: auditPageLayout mapping', () => {
     expect(findings[4].kind).toBe('adjacent-wordmark-echo');
     expect(findings[4].evidence.wordmark?.brandText).toBe('Æstrum');
     expect(findings[4].evidence.wordmark?.distancePx).toBe(40);
+
+    expect(findings[5].kind).toBe('above-the-fold-vacancy');
+    expect(findings[5].evidence.vacancy?.leadGapPx).toBe(191);
+    expect(findings[5].evidence.vacancy?.vacancyRatio).toBe(0.21);
+    expect(findings[5].evidence.vacancy?.internalOffsetPx).toBe(191);
   });
 });

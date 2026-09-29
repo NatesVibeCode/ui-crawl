@@ -80,7 +80,8 @@ export async function auditPageLayout(
           | 'vertical-rhythm-drift'
           | 'viewport-scale-imbalance'
           | 'unanchored-divider-bleed'
-          | 'adjacent-wordmark-echo';
+          | 'adjacent-wordmark-echo'
+          | 'above-the-fold-vacancy';
         selector: string;
         otherSelector?: string;
         remediation?: string;
@@ -99,6 +100,7 @@ export async function auditPageLayout(
         scale?: { headingHeightPx: number; viewportHeightPx: number; occupancyRatio: number; lineCount: number };
         divider?: { lineWidthPx: number; contentWidthPx: number; bleedPx: number };
         wordmark?: { brandText: string; echoText: string; distancePx: number };
+        vacancy?: { headerBottomPx: number; contentTopPx: number; leadGapPx: number; viewportHeightPx: number; vacancyRatio: number; internalOffsetPx?: number };
       }[] = [];
 
       function selectorFor(el: Element, idx?: number): string {
@@ -469,12 +471,12 @@ export async function auditPageLayout(
       }
 
       // 6. Vertical Rhythm Drift Audit
-      // Checks consecutive top-level semantic sections for erratic spacing swings (e.g. 192px vs 24px)
+      // Checks consecutive top-level semantic sections (including header) for erratic spacing swings (e.g. 192px vs 24px)
       const sections = Array.from(
-        deepAll('main > section, main > article, body > section, .page-shell > section, section.section, [class*="section"]'),
+        deepAll('header, .site-header, [role="banner"], main > section, main > article, body > section, .page-shell > section, section.section, [class*="section"]'),
       ) as HTMLElement[];
 
-      const visibleSections = sections.filter((s) => isVisible(s) && s.getBoundingClientRect().height > 50 && s.getBoundingClientRect().width > 250);
+      const visibleSections = sections.filter((s) => isVisible(s) && s.getBoundingClientRect().height > 25 && s.getBoundingClientRect().width > 250);
       const topSections = visibleSections
         .filter((s) => !visibleSections.some((other) => other !== s && other.contains(s)))
         .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
@@ -486,7 +488,20 @@ export async function auditPageLayout(
           const b = topSections[i + 1];
           const rA = a.getBoundingClientRect();
           const rB = b.getBoundingClientRect();
-          const gap = Math.round(rB.top - rA.bottom);
+
+          // Content-aware gap calculation:
+          // If section 'b' has internal padding or centering displacing its first content,
+          // measure to where its primary content starts rather than the bare container top.
+          let bTop = rB.top;
+          const firstContent = b.querySelector('h1, h2, h3, p, .kicker, .eyebrow, [class*="title"], [class*="content"]') as HTMLElement | null;
+          if (firstContent && isVisible(firstContent)) {
+            const fcRect = firstContent.getBoundingClientRect();
+            if (fcRect.top > rB.top + 40) {
+              bTop = fcRect.top;
+            }
+          }
+
+          const gap = Math.round(bTop - rA.bottom);
           if (gap >= 0 && gap < 800) {
             gaps.push({ index: i, gap, el: a });
           }
@@ -607,6 +622,58 @@ export async function auditPageLayout(
         }
       }
 
+      // 10. Above-The-Fold Vacancy Audit
+      // Checks for excessive empty vertical space pushing primary content and headings below the fold
+      const headerEl = d1('header, .site-header, [role="banner"]');
+      const headerRect = headerEl && isVisible(headerEl) ? headerEl.getBoundingClientRect() : null;
+      const headerBottom = headerRect ? Math.max(0, headerRect.bottom) : 0;
+
+      const primaryHeading = d1('main h1, .hero h1, h1, [role="main"] h1');
+      if (primaryHeading && isVisible(primaryHeading)) {
+        const headingRect = primaryHeading.getBoundingClientRect();
+        if (headingRect.top < winH) {
+          // Check for any preceding kicker/eyebrow/badge within the hero
+          const heroContainer = primaryHeading.closest('section, [class*="hero"], main, body') as HTMLElement | null;
+          const kicker = heroContainer?.querySelector('.kicker, .eyebrow, .meta, [class*="kicker"], [class*="eyebrow"], [class*="badge"]') as HTMLElement | null;
+          const kickerRect = kicker && isVisible(kicker) && kicker.getBoundingClientRect().top < headingRect.top
+            ? kicker.getBoundingClientRect()
+            : null;
+          const contentTop = kickerRect ? kickerRect.top : headingRect.top;
+          const leadGap = Math.round(contentTop - headerBottom);
+          const vacancyRatio = Math.round((leadGap / winH) * 100) / 100;
+
+          // Check if the container itself has a large internal offset from flex/grid centering or padding
+          let internalOffsetPx: number | undefined;
+          if (heroContainer) {
+            const containerRect = heroContainer.getBoundingClientRect();
+            const internalTop = Math.round(contentTop - containerRect.top);
+            if (internalTop > 60) {
+              internalOffsetPx = internalTop;
+            }
+          }
+
+          // A lead gap >= 130px with vacancyRatio >= 0.18
+          if (leadGap >= 130 && vacancyRatio >= 0.18) {
+            const offsetNote = internalOffsetPx && internalOffsetPx > 100
+              ? ` (container internal offset ${internalOffsetPx}px from flex/grid centering or padding)`
+              : '';
+            findings.push({
+              kind: 'above-the-fold-vacancy',
+              selector: selectorFor(kicker || primaryHeading),
+              vacancy: {
+                headerBottomPx: Math.round(headerBottom),
+                contentTopPx: Math.round(contentTop),
+                leadGapPx: leadGap,
+                viewportHeightPx: winH,
+                vacancyRatio,
+                internalOffsetPx,
+              },
+              remediation: `Excessive above-the-fold void (${leadGap}px gap, ${Math.round(vacancyRatio * 100)}% of viewport height between header and content)${offsetNote}. Reduce hero padding-top, eliminate artificial container min-height, or change align-items: center to prevent pushing primary copy below the fold.`,
+            });
+          }
+        }
+      }
+
       return findings;
     })
     .catch(() => []);
@@ -640,6 +707,7 @@ export async function auditPageLayout(
       scale: iss.scale,
       divider: iss.divider,
       wordmark: iss.wordmark,
+      vacancy: iss.vacancy,
     },
   }));
 }

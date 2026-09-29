@@ -46,7 +46,8 @@ export type FindingType =
   | 'vertical-rhythm-drift' // irregular vertical spacing jumps between sibling sections (taste)
   | 'viewport-scale-imbalance' // hero heading consumes >35% of above-the-fold viewport height (taste)
   | 'unanchored-divider-bleed' // horizontal divider line width exceeds page content grid boundaries (taste)
-  | 'adjacent-wordmark-echo'; // site wordmark text immediately repeated in adjacent hero subhead (taste)
+  | 'adjacent-wordmark-echo' // site wordmark text immediately repeated in adjacent hero subhead (taste)
+  | 'above-the-fold-vacancy'; // excessive empty vertical space between header and hero content (taste)
 
 export interface SourceLocation {
   file?: string;
@@ -252,6 +253,14 @@ export interface Evidence {
     brandText: string;
     echoText: string;
     distancePx: number;
+  };
+  vacancy?: {
+    headerBottomPx: number;
+    contentTopPx: number;
+    leadGapPx: number;
+    viewportHeightPx: number;
+    vacancyRatio: number;
+    internalOffsetPx?: number;
   };
 }
 

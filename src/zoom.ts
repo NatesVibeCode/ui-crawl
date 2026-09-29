@@ -60,7 +60,10 @@ export async function zoomPass(
     const measured = await page
       .evaluate((sel) => {
         const vp = { w: document.documentElement.clientWidth, h: document.documentElement.clientHeight };
-        const els = Array.from(document.querySelectorAll(sel)).slice(0, 40);
+        const deep = ((x: unknown) =>
+          (x as { __uicrawlDeep?: (s: string) => Element[] }).__uicrawlDeep
+          || ((s: string) => Array.from(document.querySelectorAll(s))))(window);
+        const els = deep(sel).slice(0, 40);
         const boxes = els.map((el) => {
           const r = el.getBoundingClientRect();
           return {

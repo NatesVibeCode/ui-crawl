@@ -166,7 +166,7 @@ async function auditViaInPage(page: Page, controls: Control[]): Promise<Map<numb
   const evalResult = await page
     .evaluate(
       ([selector, targetIndices]) => {
-        const deepAll = (window as unknown as { __uicrawlQ: (s: string) => Element[] }).__uicrawlQ;
+        const deepAll = ((w: any) => (w.__uicrawlQ || function(s: string){ return Array.from(document.querySelectorAll(s)); }))(window);
         const els = deepAll(selector) as HTMLElement[];
         const hoverSelectors: string[] = [];
         const activeSelectors: string[] = [];

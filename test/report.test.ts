@@ -39,6 +39,27 @@ const result: CrawlResult = {
   ],
 };
 
+it('carries detectorFailures through every output shape so a crashed detector is never silent', () => {
+  const failures = [{ route: '/x', detector: 'contrast', message: 'boom' }];
+  const result = {
+    baseUrl: 'http://x',
+    startedAt: '',
+    finishedAt: '',
+    pages: [],
+    findings: [],
+    detectorFailures: failures,
+  };
+  const payload = buildAgentPayload(result);
+  expect(payload.summary.detectorFailures).toEqual(failures);
+  // An empty defect count with a crashed detector is NOT a clean bill of health.
+  const plan = buildFixPlan(result);
+  expect(plan.done).toBe(false);
+  expect(plan.summary.detectorFailures).toEqual(failures);
+  expect(plan.exitCriteria).toContain('crashed');
+  const full = JSON.parse(buildFindingsJson(result));
+  expect(full.summary.detectorFailures).toEqual(failures);
+});
+
 describe('report builders', () => {
   it('findings json carries a summary', () => {
     const parsed = JSON.parse(buildFindingsJson(result));

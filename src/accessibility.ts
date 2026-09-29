@@ -37,7 +37,10 @@ export async function auditPageAccessibility(
       const associatedLabel = (el: Element): string => {
         const html = el as HTMLInputElement;
         if (html.id) {
-          const label = document.querySelector(`label[for="${CSS.escape(html.id)}"]`);
+          const d1 = ((x: unknown) =>
+            (x as { __uicrawlDeepOne?: (s: string) => Element | null }).__uicrawlDeepOne
+            || ((s: string) => document.querySelector(s)))(window);
+          const label = d1(`label[for="${CSS.escape(html.id)}"]`);
           if (label) return text(label);
         }
         const parent = el.closest('label');

@@ -1,3 +1,4 @@
+import { checkTui, observeTui, type TuiCheckOptions, type TuiObserveOptions } from './tuiCheck.js';
 import * as readline from 'node:readline';
 import type { Readable, Writable } from 'node:stream';
 import { readFile } from 'node:fs/promises';
@@ -8,7 +9,9 @@ import { buildAgentPayload, buildFindingsJson, buildFixPlan, type AgentPayload }
 import { snapshotUrl, formatSnapshot } from './snapshot.js';
 import { serveStatic, discoverHtmlRoutes, type StaticServer } from './serve.js';
 import { openDatabase, getDiff, getRunHistory, getDefectRoutes, hasRun, getRunResult } from './db.js';
-import { UiSession, SessionRegistry, type SessionAction } from './session.js';
+import { UiSession, SessionRegistry, type SessionAction, type AnySession } from './session.js';
+import { TuiSession, type TuiAction } from './tuiSession.js';
+import { auditTui } from './tuiAudit.js';
 import { SELECTOR, SNAPSHOT_SELECTOR } from './selectors.js';
 
 export interface JsonRpcRequest {
@@ -169,6 +172,10 @@ export const MCP_TOOLS = [
         dir: { type: 'string', description: 'Local directory to serve and open' },
         file: { type: 'string', description: 'Local HTML file to serve and open' },
         route: { type: 'string', description: 'Path to open within a dir/file target (e.g. /about)' },
+        tui: { type: 'string', description: 'Command to run as a local TUI (e.g. "top", "python app.py", "./my-tui")' },
+        cwd: { type: 'string', description: 'Working directory for the TUI command' },
+        cols: { type: 'number', description: 'Terminal columns (default 80)' },
+        rows: { type: 'number', description: 'Terminal rows (default 24)' },
         browser: { type: 'string', enum: ['chromium', 'webkit', 'firefox'] },
         width: { type: 'number', description: 'Viewport width (default 1280)' },
         height: { type: 'number', description: 'Viewport height (default 800)' },
@@ -183,18 +190,19 @@ export const MCP_TOOLS = [
   {
     name: 'ui_act',
     description:
-      'Perform one action in a live session and report what provably happened: the ACTED/NOOP verdict, the signals behind it, the resulting URL, a fresh numbered snapshot, and a screenshot. Address controls by the [n] index in the latest snapshot; a missing index fails loudly, never clicks something adjacent. Actions: click, fill, select, press, scroll, resize, theme, screenshot, back, forward, reload, wait.',
+      'Perform one action in a live session and report what provably happened: the ACTED/NOOP verdict, the signals behind it, the resulting URL, a fresh numbered snapshot, and a screenshot. Address controls by the [n] index in the latest snapshot; a missing index fails loudly, never clicks something adjacent. Actions: click, fill, select, press, write, type, key, scroll, resize, theme, screenshot, back, forward, reload, wait.',
     inputSchema: {
       type: 'object',
       properties: {
-        sessionId: { type: 'string', description: 'From ui_open' },
+        sessionId: { type: 'string', description: 'From ui_open or ui_tui_open' },
         action: {
           type: 'string',
-          enum: ['click', 'fill', 'select', 'hover', 'fillForm', 'press', 'scroll', 'resize', 'theme', 'screenshot', 'back', 'forward', 'reload', 'wait'],
+          enum: ['click', 'fill', 'select', 'hover', 'fillForm', 'press', 'write', 'type', 'key', 'scroll', 'resize', 'theme', 'screenshot', 'back', 'forward', 'reload', 'wait'],
           description: 'Which action to perform',
         },
         index: { type: 'number', description: 'Snapshot index to address, for click/fill/select/hover' },
         value: { type: 'string', description: 'Text to fill, option to select' },
+        text: { type: 'string', description: 'Text to write/type into stdin for TUI' },
         fields: {
           type: 'array',
           description: 'Fields for fillForm: [{index, value}, …] — filled in one step under one observation window',
@@ -210,11 +218,13 @@ export const MCP_TOOLS = [
           description: 'Decision for the next native dialog this action raises; without it dialogs are recorded and dismissed',
         },
         promptText: { type: 'string', description: 'Text for a prompt dialog being accepted' },
-        key: { type: 'string', description: 'Key for press, e.g. "Enter", "Tab", "Escape"' },
+        key: { type: 'string', description: 'Key for press, e.g. "Enter", "Tab", "Escape", "ArrowDown", "ArrowUp", "Ctrl+C"' },
         dx: { type: 'number', description: 'Horizontal scroll for scroll' },
         dy: { type: 'number', description: 'Vertical scroll for scroll' },
         width: { type: 'number', description: 'Width for resize' },
         height: { type: 'number', description: 'Height for resize' },
+        cols: { type: 'number', description: 'Columns for terminal resize' },
+        rows: { type: 'number', description: 'Rows for terminal resize' },
         scheme: { type: 'string', enum: ['light', 'dark'], description: 'Colour scheme for theme' },
         fullPage: { type: 'boolean', description: 'Full-page capture for screenshot' },
         ms: { type: 'number', description: 'Milliseconds for wait' },
@@ -226,6 +236,105 @@ export const MCP_TOOLS = [
         },
       },
       required: ['sessionId', 'action'],
+    },
+  },
+  {
+    name: 'ui_tui_open',
+    description:
+      'Open a live local TUI (terminal user interface) session for step-by-step navigation and inspection. Returns a sessionId plus a numbered snapshot of interactive controls/lines and a rendered terminal screenshot. Address controls by the [n] index in that snapshot or send keystrokes with press/write.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        command: { type: 'string', description: 'Local command to launch (e.g. "python3 app.py", "htop", "./my-cli")' },
+        args: { type: 'array', items: { type: 'string' }, description: 'Command arguments' },
+        cwd: { type: 'string', description: 'Working directory' },
+        cols: { type: 'number', description: 'Terminal columns (default 80)' },
+        rows: { type: 'number', description: 'Terminal rows (default 24)' },
+        outDir: { type: 'string', description: 'Where screenshots are written' },
+        settleMs: { type: 'number', description: 'Time in ms to allow terminal output to settle (default 600)' },
+        markedScreenshots: { type: 'boolean', description: 'Number controls on screenshots with set-of-marks badges (default true)' },
+      },
+      required: ['command'],
+    },
+  },
+  {
+    name: 'ui_tui_act',
+    description:
+      'Perform one action in a live TUI session: send keys (press), text (write), click numbered control [n], resize terminal, or wait. Returns the ACTED/NOOP verdict, screen signals, updated snapshot, and a screenshot of the terminal.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        sessionId: { type: 'string', description: 'From ui_tui_open or ui_open' },
+        action: {
+          type: 'string',
+          enum: ['press', 'write', 'type', 'paste', 'click', 'fill', 'scroll', 'resize', 'wait', 'screenshot'],
+          description: 'Action to perform in the TUI',
+        },
+        key: { type: 'string', description: 'Key to press, e.g. "Enter", "Tab", "ArrowDown", "ArrowUp", "Escape", "Ctrl+C"' },
+        text: { type: 'string', description: 'Text to write/type into stdin' },
+        value: { type: 'string', description: 'Value for fill/type' },
+        index: { type: 'number', description: 'Snapshot index of inferred control to click' },
+        dx: { type: 'number', description: 'Horizontal wheel steps; terminal mouse mode required' },
+        dy: { type: 'number', description: 'Vertical wheel steps; terminal mouse mode required' },
+        cols: { type: 'number', description: 'New terminal columns for resize' },
+        rows: { type: 'number', description: 'New terminal rows for resize' },
+        ms: { type: 'number', description: 'Milliseconds to wait' },
+        snapshot: { type: 'string', enum: ['full', 'changed', 'none'] },
+      },
+      required: ['sessionId', 'action'],
+    },
+  },
+  {
+    name: 'ui_tui_check',
+    description: 'Read-only assertions for a live TUI: wait for explicit readiness text, then measure named surface padding in cells and check visible text. Returns pass/fail separately from heuristic defect/taste findings. Does not send keys.',
+    inputSchema: {
+      type: 'object', properties: {
+        sessionId: { type: 'string' },
+        readyText: { type: 'array', items: { type: 'string' }, description: 'Text that must appear before measurement' },
+        timeoutMs: { type: 'integer', minimum: 0, maximum: 10000 },
+        requiredText: { type: 'array', items: { type: 'string' } },
+        absentText: { type: 'array', items: { type: 'string' } },
+        spacing: { type: 'array', minItems: 1, items: { type: 'object', required: ['name'], properties: {
+          name: { type: 'string' }, background: { type: 'string', description: 'Exact #rrggbb of one solid rectangular surface; otherwise use bounds' },
+          bounds: { type: 'object', required: ['row', 'col', 'rows', 'cols'], properties: { row: { type: 'integer' }, col: { type: 'integer' }, rows: { type: 'integer' }, cols: { type: 'integer' } } },
+          minRows: { type: 'integer' }, minCols: { type: 'integer' }, minGapBefore: { type: 'integer' }, maxGapBefore: { type: 'integer', description: 'Maximum blank rows preceding the surface; detects excessive separation between related content' },
+          minPadding: { type: 'object', properties: { top: { type: 'integer' }, right: { type: 'integer' }, bottom: { type: 'integer' }, left: { type: 'integer' } } },
+          requiredText: { type: 'array', items: { type: 'string' } },
+        } } },
+      }, required: ['sessionId'],
+    },
+  },
+  {
+    name: 'ui_tui_observe',
+    description: 'Read-only timed observation of visible terminal text, optionally in a bounded content area. Ordered text milestones must appear in different changed samples; absentText distinguishes partial output from a completed reply. A spinner alone does not prove model or tool streaming. No input is sent.',
+    inputSchema: {
+      type: 'object', properties: {
+        sessionId: { type: 'string' }, durationMs: { type: 'integer', minimum: 1, maximum: 10000 },
+        intervalMs: { type: 'integer', minimum: 10, maximum: 1000 },
+        bounds: { type: 'object', required: ['row', 'col', 'rows', 'cols'], properties: { row: { type: 'integer' }, col: { type: 'integer' }, rows: { type: 'integer' }, cols: { type: 'integer' } } },
+        sequence: { type: 'array', minItems: 1, items: { type: 'object', required: ['name', 'text'], properties: {
+          name: { type: 'string' }, text: { type: 'string' }, absentText: { type: 'array', items: { type: 'string' } },
+        } } },
+      }, required: ['sessionId', 'durationMs'],
+    },
+  },
+  {
+    name: 'ui_tui_audit',
+    description:
+      'Batch audit of a local TUI command: startup health, ANSI color contrast (WCAG AA), text clipping/overflow, and control responsiveness. Returns a verdict, prioritized defects/taste findings, and a screenshot of the terminal.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        command: { type: 'string', description: 'Local command to launch and audit' },
+        args: { type: 'array', items: { type: 'string' } },
+        cwd: { type: 'string' },
+        cols: { type: 'number', description: 'Terminal columns (default 80)' },
+        rows: { type: 'number', description: 'Terminal rows (default 24)' },
+        outDir: { type: 'string' },
+        settleMs: { type: 'number', description: 'Time to let output settle on startup (default 800)' },
+        probeControls: { type: 'boolean', description: 'Opt in to real mouse actions on inferred controls (default false; can mutate the application)' },
+      },
+      required: ['command'],
     },
   },
   {
@@ -354,7 +463,7 @@ function crawlConfigFrom(args: Record<string, unknown>, baseUrl: string): CrawlC
   } as CrawlConfig;
 }
 
-function buildAction(args: Record<string, unknown>): SessionAction | string {
+function buildAction(args: Record<string, unknown>): SessionAction | TuiAction | string {
   const kind = str(args.action);
   const index = num(args.index);
   const value = str(args.value);
@@ -372,6 +481,12 @@ function buildAction(args: Record<string, unknown>): SessionAction | string {
         : { type: 'select', index, value };
     case 'press':
       return { type: 'press', key: str(args.key) ?? value ?? 'Enter' };
+    case 'key':
+      return { type: 'press', key: str(args.key) ?? value ?? 'Enter' };
+    case 'write':
+    case 'type':
+    case 'paste':
+      return { type: kind as 'write' | 'type' | 'paste', text: str(args.text) ?? str(args.value) ?? '' };
     case 'hover':
       return index === undefined ? 'hover requires an index' : { type: 'hover', index };
     case 'fillForm': {
@@ -393,10 +508,10 @@ function buildAction(args: Record<string, unknown>): SessionAction | string {
     case 'scroll':
       return { type: 'scroll', dx: num(args.dx), dy: num(args.dy) };
     case 'resize': {
-      const width = num(args.width);
-      const height = num(args.height);
+      const width = num(args.width) ?? num(args.cols);
+      const height = num(args.height) ?? num(args.rows);
       return width === undefined || height === undefined
-        ? 'resize requires width and height'
+        ? 'resize requires width/cols and height/rows'
         : { type: 'resize', width, height };
     }
     case 'theme':
@@ -412,7 +527,7 @@ function buildAction(args: Record<string, unknown>): SessionAction | string {
     case 'wait':
       return { type: 'wait', ms: num(args.ms) };
     default:
-      return `unknown action "${kind}" — expected one of: click, fill, select, press, scroll, resize, theme, screenshot, back, forward, reload, wait`;
+      return `unknown action "${kind}" — expected one of: click, fill, select, press, write, type, paste, scroll, resize, theme, screenshot, back, forward, reload, wait`;
   }
 }
 
@@ -456,7 +571,31 @@ export async function handleMcpMessage(request: JsonRpcRequest): Promise<JsonRpc
     });
   }
 
-  if (name === 'ui_open') {
+  if (name === 'ui_open' || name === 'ui_tui_open') {
+    const tuiCmd = str(args.tui) ?? (name === 'ui_tui_open' ? str(args.command) : undefined);
+    if (tuiCmd) {
+      let tuiSession: TuiSession | undefined;
+      try {
+        tuiSession = await TuiSession.open({
+          command: tuiCmd,
+          args: Array.isArray(args.args) ? (args.args as string[]) : undefined,
+          cwd: str(args.cwd),
+          cols: num(args.cols) ?? num(args.width),
+          rows: num(args.rows) ?? num(args.height),
+          outDir: str(args.outDir),
+          interactionTimeoutMs: num(args.settleMs),
+          markedScreenshots: bool(args.markedScreenshots),
+        });
+        sessions.add(tuiSession);
+        const state = await tuiSession.act({ type: 'wait', ms: 1 });
+        const shot = state.screenshot ? await imageContent(tuiSession.screenshotPath(state.screenshot)) : null;
+        return okWithImages(id, { sessionId: tuiSession.id, ...state }, [shot]);
+      } catch (err) {
+        await tuiSession?.close().catch(() => {});
+        return fail(id, `TUI open failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
     let session: UiSession | undefined;
     try {
       session = await UiSession.open(
@@ -487,19 +626,22 @@ export async function handleMcpMessage(request: JsonRpcRequest): Promise<JsonRpc
     }
   }
 
-  if (name === 'ui_act') {
+  if (name === 'ui_act' || name === 'ui_tui_act') {
     const sessionId = str(args.sessionId);
-    if (!sessionId) return fail(id, 'ui_act requires a sessionId from ui_open');
-    let session: UiSession;
+    if (!sessionId) return fail(id, `${name} requires a sessionId from ui_open or ui_tui_open`);
+    let session: AnySession;
     try {
       session = sessions.get(sessionId);
     } catch {
-      return fail(id, `no open session "${sessionId}" — call ui_open first`);
+      return fail(id, `no open session "${sessionId}" — call ui_open or ui_tui_open first`);
     }
     // A `route` argument is a navigation, not an action, and is allowed to fail loudly.
     if (str(args.route)) {
+      if ('type' in session && session.type === 'tui') {
+        return fail(id, 'route navigation is not supported in TUI sessions');
+      }
       try {
-        return ok(id, await session.goto({ route: str(args.route) }));
+        return ok(id, await (session as UiSession).goto({ route: str(args.route) }));
       } catch (err) {
         return fail(id, `navigation failed: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -515,11 +657,51 @@ export async function handleMcpMessage(request: JsonRpcRequest): Promise<JsonRpc
         ? { dialog: { decision: dialogArg, promptText: str(args.promptText) } as const }
         : {};
     const state = await session.act(
-      action,
+      action as any,
       { ...(snapshotMode ? { snapshot: snapshotMode } : {}), ...dialogOpt },
     );
     const shot = state.screenshot ? await imageContent(session.screenshotPath(state.screenshot)) : null;
     return okWithImages(id, state, [shot]);
+  }
+
+  if (name === 'ui_tui_check' || name === 'ui_tui_observe') {
+    try {
+      const sessionId = str(args.sessionId);
+      if (!sessionId) return fail(id, `${name} requires sessionId`);
+      const session = sessions.get(sessionId);
+      if (!(session instanceof TuiSession)) return fail(id, `${name} requires a terminal session`);
+      if (name === 'ui_tui_observe') return ok(id, await observeTui(session, args as unknown as TuiObserveOptions));
+      const result = await checkTui(session, args as unknown as TuiCheckOptions);
+      const shot = result.screenshot ? await imageContent(session.screenshotPath(result.screenshot)) : null;
+      return okWithImages(id, result, [shot]);
+    } catch (error) { return fail(id, `${name}: ${error instanceof Error ? error.message : String(error)}`); }
+  }
+
+  if (name === 'ui_tui_audit') {
+    const command = str(args.command) ?? str(args.tui);
+    if (!command) return fail(id, 'ui_tui_audit requires command');
+    try {
+      const payload = await auditTui({
+        command,
+        args: Array.isArray(args.args) ? (args.args as string[]) : undefined,
+        cwd: str(args.cwd),
+        cols: num(args.cols),
+        rows: num(args.rows),
+        outDir: str(args.outDir),
+        settleMs: num(args.settleMs),
+        probeControls: bool(args.probeControls),
+      });
+      const images: Array<ImageContent | null> = [];
+      for (const page of payload.pages) {
+        if (page.screenshot) {
+          const abs = path.resolve(str(args.outDir) ?? './ui-crawl-out', page.screenshot);
+          images.push(await imageContent(abs));
+        }
+      }
+      return okWithImages(id, payload, images);
+    } catch (err) {
+      return fail(id, `ui_tui_audit failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   if (name === 'ui_close') {
@@ -560,7 +742,7 @@ export async function handleMcpMessage(request: JsonRpcRequest): Promise<JsonRpc
         if (typeof action === 'string') {
           return fail(id, `ui_login step rejected: ${action}`);
         }
-        const result = await session.act(action, { snapshot: 'none' });
+        const result = await session.act(action as SessionAction, { snapshot: 'none' });
         acted.push(`${result.action} -> ${result.verdict}`);
         if (!result.ok) {
           return fail(id, `ui_login step failed (${result.action}): ${result.error}`);
@@ -655,7 +837,10 @@ export async function handleMcpMessage(request: JsonRpcRequest): Promise<JsonRpc
         const session = sessions.get(sessionId);
         const cap = num(args.cap);
         const entries = await session.snapshot(cap);
-        return ok(id, str(args.format) === 'json' ? entries : formatSnapshot(entries, cap));
+        if ('type' in session && session.type === 'tui') {
+          return ok(id, str(args.format) === 'json' ? entries : (session as TuiSession).formatSnapshot(entries as any, 'full'));
+        }
+        return ok(id, str(args.format) === 'json' ? entries : formatSnapshot(entries as any, cap));
       }
       const entries = await snapshotUrl({
         url: str(args.url),

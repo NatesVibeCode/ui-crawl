@@ -17,7 +17,7 @@ export async function auditPageStates(page: Page, route: string, options: StateO
   await primeSelectors(page, ['*']);
   const result = await page
     .evaluate(() => {
-      const deepAll = (window as unknown as { __uicrawlQ: (s: string) => Element[] }).__uicrawlQ;
+      const deepAll = ((w: any) => (w.__uicrawlQ || function(s: string){ return Array.from(document.querySelectorAll(s)); }))(window);
       const visible = (el: Element): boolean => {
         const h = el as HTMLElement;
         const rect = h.getBoundingClientRect();
@@ -47,7 +47,7 @@ export async function auditPageStates(page: Page, route: string, options: StateO
       }[] = [];
 
       const all = deepAll('*');
-      all.forEach((el, index) => {
+      all.forEach((el: Element, index: number) => {
         if (!visible(el)) return;
         const selector = selectorFor(el, index);
         for (const attribute of ['aria-controls', 'aria-labelledby', 'aria-describedby', 'aria-owns']) {

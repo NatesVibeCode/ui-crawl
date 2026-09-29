@@ -34,7 +34,7 @@ export async function auditPageSpacing(page: Page, route: string): Promise<RawFi
   await primeSelectors(page, [SPACING_SELECTOR]);
   const issues = await page.evaluate((sel: string) => {
     const SELECTOR = sel;
-    const deepAll = (window as unknown as { __uicrawlQ: (s: string) => Element[] }).__uicrawlQ;
+    const deepAll = ((w: any) => (w.__uicrawlQ || function(s: string){ return Array.from(document.querySelectorAll(s)); }))(window);
     const els = deepAll(SELECTOR) as HTMLElement[];
     const boxes: { elIndex: number; tag: string; selector: string; isInlineLink: boolean; x: number; y: number; w: number; h: number }[] = [];
 

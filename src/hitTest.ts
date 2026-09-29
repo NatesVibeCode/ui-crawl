@@ -48,11 +48,18 @@ export async function auditPageHitTest(
   const rawResults = await page
     .evaluate(
       ({ selector, containerSelector, dialogSelector }) => {
-        const deepAll = (window as unknown as { __uicrawlQ: (s: string) => Element[] }).__uicrawlQ;
+        const deepAll = ((w: any) => (w.__uicrawlQ || function(s: string){ return Array.from(document.querySelectorAll(s)); }))(window);
         const results: RawHitTestResult[] = [];
-        const root = containerSelector ? document.querySelector(containerSelector) : document;
-        if (!root) return [];
-        const elements = (root === document ? deepAll(selector) : Array.from(root.querySelectorAll(selector))) as Element[];
+        const d1 = ((x: unknown) =>
+          (x as { __uicrawlDeepOne?: (s: string) => Element | null }).__uicrawlDeepOne
+          || ((s: string) => document.querySelector(s)))(window);
+        const root = containerSelector ? (d1(containerSelector) as Element | null) ?? document : document;
+        const elements = (root === document
+          ? deepAll(selector)
+          : deepAll(selector).filter((e: Element) =>
+              (((x: unknown) =>
+                (x as { __uicrawlIn?: (r: Node, e: Node | null) => boolean }).__uicrawlIn
+                || ((r: Node, e: Node | null) => r.contains(e as Node)))(window))(root as Node, e))) as Element[];
         const scrollBefore = { x: window.scrollX, y: window.scrollY };
 
         const openModal = !containerSelector
