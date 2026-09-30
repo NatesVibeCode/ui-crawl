@@ -1,0 +1,166 @@
+{
+  "name": "Call references and recorded artifact navigation",
+  "fixture": "repeated-arguments.json",
+  "terminal": {
+    "cols": 100,
+    "rows": 32
+  },
+  "tools": [
+    "file_write"
+  ],
+  "steps": [
+    {
+      "check": {
+        "options": {
+          "readyText": [
+            "ÆLTUM"
+          ],
+          "timeoutMs": 3000,
+          "requiredText": [
+            "ÆLTUM"
+          ]
+        }
+      }
+    },
+    {
+      "action": {
+        "type": "type",
+        "text": "Write repeat.txt with haha."
+      }
+    },
+    {
+      "observe": {
+        "name": "repeat-stream",
+        "options": {
+          "durationMs": 2500,
+          "intervalMs": 70,
+          "sequence": [
+            {
+              "name": "repeated bytes before execution",
+              "text": "\"content\":\"haha\""
+            },
+            {
+              "name": "settled call",
+              "text": "file_write succeeded"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "awaitObservation": "repeat-stream"
+    },
+    {
+      "check": {
+        "options": {
+          "readyText": [
+            "Repeated fragments preserved: haha.",
+            "file_write succeeded"
+          ],
+          "requiredText": [
+            "Wrote 4 bytes."
+          ],
+          "absentText": [
+            "bytes_written"
+          ],
+          "timeoutMs": 5000
+        }
+      }
+    },
+    {
+      "workspaceAssert": {
+        "path": "repeat.txt",
+        "equals": "haha"
+      }
+    },
+    {
+      "action": {
+        "type": "type",
+        "text": "/references repeat.txt"
+      }
+    },
+    {
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "check": {
+        "options": {
+          "requiredText": [
+            "REFERENCES",
+            "artifact",
+            "repeat.txt",
+            "recorded tool result · succeeded",
+            "OE call: repeat-write"
+          ]
+        }
+      }
+    },
+    {
+      "action": {
+        "type": "press",
+        "key": "Ctrl+Y"
+      }
+    },
+    {
+      "clipboardAssert": {
+        "equals": "repeat.txt"
+      }
+    },
+    {
+      "action": {
+        "type": "press",
+        "key": "Escape"
+      }
+    },
+    {
+      "action": {
+        "type": "type",
+        "text": "/calls"
+      }
+    },
+    {
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "check": {
+        "options": {
+          "requiredText": [
+            "TOOL CALLS",
+            "Ctrl+R references",
+            "repeat-write"
+          ]
+        }
+      }
+    },
+    {
+      "action": {
+        "type": "press",
+        "key": "Ctrl+R"
+      }
+    },
+    {
+      "check": {
+        "options": {
+          "requiredText": [
+            "REFERENCES",
+            "receipt",
+            "recorded receipt · succeeded",
+            "OE call: repeat-write"
+          ]
+        }
+      }
+    }
+  ]
+}

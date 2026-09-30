@@ -1,0 +1,230 @@
+{
+  "name": "Retained source rendering, stream, resize, copy and unavailable references",
+  "fixture": "retained-reading.json",
+  "terminal": {
+    "cols": 100,
+    "rows": 40
+  },
+  "tools": [
+    "file_read"
+  ],
+  "steps": [
+    {
+      "check": {
+        "options": {
+          "readyText": [
+            "ÆLTUM"
+          ],
+          "timeoutMs": 5000,
+          "requiredText": [
+            "ÆLTUM"
+          ]
+        }
+      }
+    },
+    {
+      "action": {
+        "type": "type",
+        "text": "Replay retained reading response"
+      }
+    },
+    {
+      "observe": {
+        "name": "reading-stream",
+        "options": {
+          "durationMs": 2600,
+          "intervalMs": 45,
+          "sequence": [
+            {
+              "name": "partial response",
+              "text": "Short answer:",
+              "absentText": [
+                "Happy to sketch"
+              ]
+            },
+            {
+              "name": "completion",
+              "text": "Happy to sketch"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "awaitObservation": "reading-stream"
+    },
+    {
+      "waitForFixture": {
+        "index": 0,
+        "status": "complete"
+      }
+    },
+    {
+      "action": {
+        "type": "press",
+        "key": "Ctrl+PageUp"
+      }
+    },
+    {
+      "action": {
+        "type": "press",
+        "key": "Ctrl+PageUp"
+      }
+    },
+    {
+      "action": {
+        "type": "press",
+        "key": "Ctrl+PageUp"
+      }
+    },
+    {
+      "check": {
+        "options": {
+          "requiredText": [
+            "Why the two-layer split is right"
+          ],
+          "absentText": [
+            "**mostly no",
+            "## Why"
+          ]
+        }
+      }
+    },
+    {
+      "action": {
+        "type": "resize",
+        "width": 60,
+        "height": 30
+      }
+    },
+    {
+      "check": {
+        "options": {
+          "requiredText": [
+            "ÆLTUM",
+            "history"
+          ]
+        }
+      }
+    },
+    {
+      "action": {
+        "type": "resize",
+        "width": 100,
+        "height": 40
+      }
+    },
+    {
+      "action": {
+        "type": "type",
+        "text": "/copy answer"
+      }
+    },
+    {
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "clipboardAssert": {
+        "equals": "Short answer: **mostly no — the split is doing real work. But there's one seam worth hardening, and it's not the one you'd fix by typing the outputs.**\n\n## Why the two-layer split is right\n\nThe two layers have different consumers, and that's what should drive the typing decision:\n\n- **Tool outputs** are consumed by *me*, making judgments over ambiguous, messy real-world data — PDFs with broken text layers, grep hits across encodings, command output with stack traces mixed into stderr. Forcing that into typed schemas either fails on the mess or accumulates union types until the schema is a small programming language. Text degrades gracefully; `pdf_text` returning \"no extractable text\" is a fine text answer and a lousy typed one.\n- **DAG artifacts** are consumed by the *runner*, mechanically. That's exactly where types belong — and it already has them: required `decision.json` fields, phase ordering, hash sealing in `receipt.json`.\n\nUnifying into one typed pipeline would buy you validation power precisely where validation adds nothing (my reading of a file), and pay for it in flexibility everywhere else. Quick questions would become DAG runs.\n\n## The actual weak point\n\nIt's not that outputs aren't typed — it's the **claim→evidence seam**. The DAG validates that I *wrote* `final.md`; nothing checks that \"tests pass\" in my prose corresponds to an actual `run_tests` record. And typing the tool outputs harder wouldn't fix this either — a typed output I misread still ends up as an unsupported claim in prose.\n\nSo the targeted changes I'd actually make:\n\n1. **Evidence-referencing in DAG artifacts.** Require assertions of the form \"tests pass\" / \"no existing implementation\" to cite a tool-run ID or digest the runner can verify exists. Cheap, mechanical, closes the hallucination seam where it actually occurs — at the prose boundary, not the tool boundary.\n2. **Standardize a tiny envelope on every tool.** The real risk isn't untyped text, it's *silently bounded* text. If `bash` output is truncated and I don't know it, I'll reason as if I'd seen everything. `file_read` already gives `next_offset`; make every tool return a small machine-readable header (truncated flag, digest, exit code) alongside the text payload.\n3. **Leave the middle alone.** Outputs feeding judgment stay prose-shaped.\n\n## What I'd not change\n\nThe DAG-as-scaffolding-not-pipeline philosophy, and the honest admission baked into the skill docs (\"a completed DAG is not evidence of originality\"). That honesty is a feature — the fix for it is evidence links, not pretending validation equals correctness.\n\nHappy to sketch what the evidence-link validation would look like as a concrete spec if you want to take it further."
+      }
+    },
+    {
+      "action": {
+        "type": "type",
+        "text": "/export preserved.md"
+      }
+    },
+    {
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "waitMs": 300
+    },
+    {
+      "sessionAssert": {
+        "files": {
+          "exports/preserved.md": {
+            "contains": "Short answer: **mostly no — the split is doing real work. But there's one seam worth hardening, and it's not the one you'd fix by typing the outputs.**\n\n## Why the two-layer split is right\n\nThe two layers have different consumers, and that's what should drive the typing decision:\n\n- **Tool outputs** are consumed by *me*, making judgments over ambiguous, messy real-world data — PDFs with broken text layers, grep hits across encodings, command output with stack traces mixed into stderr. Forcing that into typed schemas either fails on the mess or accumulates union types until the schema is a small programming language. Text degrades gracefully; `pdf_text` returning \"no extractable text\" is a fine text answer and a lousy typed one.\n- **DAG artifacts** are consumed by the *runner*, mechanically. That's exactly where types belong — and it already has them: required `decision.json` fields, phase ordering, hash sealing in `receipt.json`.\n\nUnifying into one typed pipeline would buy you validation power precisely where validation adds nothing (my reading of a file), and pay for it in flexibility everywhere else. Quick questions would become DAG runs.\n\n## The actual weak point\n\nIt's not that outputs aren't typed — it's the **claim→evidence seam**. The DAG validates that I *wrote* `final.md`; nothing checks that \"tests pass\" in my prose corresponds to an actual `run_tests` record. And typing the tool outputs harder wouldn't fix this either — a typed output I misread still ends up as an unsupported claim in prose.\n\nSo the targeted changes I'd actually make:\n\n1. **Evidence-referencing in DAG artifacts.** Require assertions of the form \"tests pass\" / \"no existing implementation\" to cite a tool-run ID or digest the runner can verify exists. Cheap, mechanical, closes the hallucination seam where it actually occurs — at the prose boundary, not the tool boundary.\n2. **Standardize a tiny envelope on every tool.** The real risk isn't untyped text, it's *silently bounded* text. If `bash` output is truncated and I don't know it, I'll reason as if I'd seen everything. `file_read` already gives `next_offset`; make every tool return a small machine-readable header (truncated flag, digest, exit code) alongside the text payload.\n3. **Leave the middle alone.** Outputs feeding judgment stay prose-shaped.\n\n## What I'd not change\n\nThe DAG-as-scaffolding-not-pipeline philosophy, and the honest admission baked into the skill docs (\"a completed DAG is not evidence of originality\"). That honesty is a feature — the fix for it is evidence links, not pretending validation equals correctness.\n\nHappy to sketch what the evidence-link validation would look like as a concrete spec if you want to take it further."
+          }
+        }
+      }
+    },
+    {
+      "action": {
+        "type": "type",
+        "text": "/references missing-object"
+      }
+    },
+    {
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "check": {
+        "options": {
+          "requiredText": [
+            "REFERENCES",
+            "No grounded objects",
+            "execution is unknown"
+          ]
+        }
+      }
+    },
+    {
+      "action": {
+        "type": "press",
+        "key": "Escape"
+      }
+    },
+    {
+      "action": {
+        "type": "type",
+        "text": "/model"
+      }
+    },
+    {
+      "check": {
+        "options": {
+          "requiredText": [
+            "aeltum-fixture"
+          ],
+          "absentText": [
+            "batch"
+          ]
+        }
+      }
+    },
+    {
+      "action": {
+        "type": "press",
+        "key": "Escape"
+      }
+    },
+    {
+      "action": {
+        "type": "press",
+        "key": "Ctrl+U"
+      }
+    },
+    {
+      "fixtureAssert": {
+        "requestCount": 1,
+        "noViolations": true
+      }
+    }
+  ]
+}
