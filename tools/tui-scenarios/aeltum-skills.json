@@ -1,0 +1,197 @@
+{
+  "name": "Native skills load and inspect without provider calls",
+  "fixture": "native-skills.json",
+  "terminal": {
+    "cols": 100,
+    "rows": 32
+  },
+  "tools": [
+    "file_read"
+  ],
+  "steps": [
+    {
+      "check": {
+        "options": {
+          "requiredText": [
+            "\u00c6LTUM"
+          ],
+          "timeoutMs": 4000,
+          "readyText": [
+            "\u00c6LTUM"
+          ]
+        }
+      }
+    },
+    {
+      "action": {
+        "type": "type",
+        "text": "/skills"
+      }
+    },
+    {
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "check": {
+        "options": {
+          "requiredText": [
+            "skill repo-discover",
+            "sha256:"
+          ],
+          "timeoutMs": 4000,
+          "readyText": [
+            "skill repo-discover",
+            "sha256:"
+          ]
+        }
+      }
+    },
+    {
+      "fixtureAssert": {
+        "requestCount": 0,
+        "noViolations": true
+      }
+    },
+    {
+      "action": {
+        "type": "type",
+        "text": "Check native skill loading"
+      }
+    },
+    {
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "check": {
+        "options": {
+          "requiredText": [
+            "Skill-aware fixture response.",
+            "> Check native skill loading"
+          ],
+          "timeoutMs": 4000,
+          "readyText": [
+            "Skill-aware fixture response.",
+            "> Check native skill loading"
+          ]
+        },
+        "orderedText": [
+          "> Check native skill loading",
+          "Skill-aware fixture response."
+        ]
+      }
+    },
+    {
+      "action": {
+        "type": "type",
+        "text": "/skills repo-discover"
+      }
+    },
+    {
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "check": {
+        "options": {
+          "requiredText": [
+            "skill repo-discover",
+            "sha256:"
+          ],
+          "timeoutMs": 4000,
+          "readyText": [
+            "skill repo-discover",
+            "sha256:"
+          ]
+        }
+      }
+    },
+    {
+      "fixtureAssert": {
+        "requestCount": 1,
+        "noViolations": true
+      }
+    },
+    {
+      "action": {
+        "type": "type",
+        "text": "/references repo-discover"
+      }
+    },
+    {
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "check": {
+        "options": {
+          "requiredText": [
+            "REFERENCES",
+            "repo-discover",
+            "execution unknown"
+          ],
+          "timeoutMs": 4000,
+          "readyText": [
+            "REFERENCES",
+            "repo-discover",
+            "execution unknown"
+          ]
+        }
+      }
+    },
+    {
+      "action": {
+        "type": "press",
+        "key": "Escape"
+      }
+    },
+    {
+      "reopen": true
+    },
+    {
+      "action": {
+        "type": "type",
+        "text": "/skills repo-discover"
+      }
+    },
+    {
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "check": {
+        "options": {
+          "requiredText": [
+            "skill repo-discover",
+            "sha256:"
+          ],
+          "timeoutMs": 4000,
+          "readyText": [
+            "skill repo-discover",
+            "sha256:"
+          ]
+        }
+      }
+    },
+    {
+      "fixtureAssert": {
+        "requestCount": 1,
+        "noViolations": true
+      }
+    },
+    {
+      "close": true
+    }
+  ]
+}

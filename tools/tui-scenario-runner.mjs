@@ -75,7 +75,7 @@ function allowedTool(name) {
   return name === 'file_read' || name === 'file_write';
 }
 
-function makePolicy(deployment, tools) {
+function makePolicy(deployment, tools, catalog = {}) {
   const policies = [{
     id: 'lane5-local-run', effect: 'allow', priority: 10,
     scope: {
@@ -84,6 +84,19 @@ function makePolicy(deployment, tools) {
       'resource.labels.permission_context': 'AO-TU',
     },
   }];
+  if (catalog.allowLoopbackProviderCatalogRead) {
+    if (!catalog.deploymentDir) throw new Error('loopback provider catalog authority requires the temporary deployment directory');
+    policies.push({
+      id: 'lane5-loopback-provider-models-call', effect: 'allow', priority: 10,
+      scope: {
+        'subject.principal': `aoa.catalog:${catalog.deploymentDir}`,
+        'subject.altitude': 'run', 'environment.altitude': 'run',
+        'resource.kind': 'mcp.tool', 'resource.owner': 'oe', 'resource.ref': 'provider_models',
+        'resource.labels.realm': deployment,
+        'action.verb': 'call', 'action.operation': 'tools/call',
+      },
+    });
+  }
   for (const name of tools) for (const verb of ['read', 'call']) policies.push({
     id: `lane5-tool-${name}-${verb}`, effect: 'allow', priority: 10,
     scope: {
@@ -196,6 +209,20 @@ async function selfTest() {
   let session;
   const open = async code => TuiSession.open({ command: ['python3', '-u', '-c', code], cols: 50, rows: 12, interactionTimeoutMs: 80, outDir: path.join('/tmp', `ui-crawl-scenario-selftest-${process.pid}`), markedScreenshots: false });
   try {
+    const defaultPolicy = makePolicy('lane5-self-test', ['file_read']);
+    note('default scenario policy does not authorize provider catalog reads', !defaultPolicy.policies.some(policy => policy.scope?.['resource.ref'] === 'provider_models'));
+    const catalogDeploymentDir = '/tmp/ui-crawl-scenario-selftest-deployment';
+    const optedInPolicy = makePolicy('lane5-self-test', ['file_read'], { allowLoopbackProviderCatalogRead: true, deploymentDir: catalogDeploymentDir });
+    const catalogPolicy = optedInPolicy.policies.find(policy => policy.id === 'lane5-loopback-provider-models-call');
+    const expectedCatalogScope = {
+      'subject.principal': `aoa.catalog:${catalogDeploymentDir}`,
+      'subject.altitude': 'run', 'environment.altitude': 'run',
+      'resource.kind': 'mcp.tool', 'resource.owner': 'oe', 'resource.ref': 'provider_models',
+      'resource.labels.realm': 'lane5-self-test',
+      'action.verb': 'call', 'action.operation': 'tools/call',
+    };
+    note('catalog opt-in grants only the observed OE call attributes', JSON.stringify(catalogPolicy?.scope) === JSON.stringify(expectedCatalogScope));
+
     const b = new TuiBuffer(40, 12);
     b.write('> question\x1b[6;1Hanswer');
     const tooWide = measureTuiSpacing(b, [{ name: 'reply', bounds: { row: 5, col: 0, rows: 1, cols: 40 }, maxGapBefore: 1 }])[0];
@@ -231,7 +258,7 @@ async function selfTest() {
   } catch (error) {
     note('self-test execution', false, error instanceof Error ? error.message : String(error));
   } finally { await session?.close().catch(() => {}); }
-  const passed = results.length === 6 && results.every(result => result.passed);
+  const passed = results.length === 8 && results.every(result => result.passed);
   return { schema: 'ui-crawl.tui-scenario-self-test.v1', passed, results };
 }
 
@@ -243,6 +270,14 @@ async function campaign(opts) {
   const fixtureHost = await realpath(path.resolve(opts['fixture-host'] ?? path.join(sdkRoot, 'tools/tui-scenarios/provider.mjs')));
   const scenarioPath = path.resolve(opts.scenario ?? path.join(here, 'tui-scenarios/aeltum-smoke.json'));
   const scenario = JSON.parse(await readFile(scenarioPath, 'utf8'));
+  if (scenario.authorizeLoopbackProviderCatalogRead !== undefined && typeof scenario.authorizeLoopbackProviderCatalogRead !== 'boolean') {
+    throw new Error('authorizeLoopbackProviderCatalogRead must be an explicit boolean scenario opt-in');
+  }
+  if (scenario.launchSettingsOnlyAtStart !== undefined && typeof scenario.launchSettingsOnlyAtStart !== 'boolean') {
+    throw new Error('launchSettingsOnlyAtStart must be a boolean scenario setting');
+  }
+  const launchSettingsOnlyAtStart = scenario.launchSettingsOnlyAtStart === true;
+  const catalogOptIn = scenario.authorizeLoopbackProviderCatalogRead === true;
   const fixturePath = path.isAbsolute(scenario.fixture) ? scenario.fixture : path.join(sdkRoot, 'tools/tui-scenarios', scenario.fixture);
   const fixture = JSON.parse(await readFile(fixturePath, 'utf8'));
   const binary = path.resolve(opts.binary);
@@ -267,9 +302,8 @@ async function campaign(opts) {
   const clipboard = await makeClipboardCapture(runDir);
   for (const dir of [workspace, deploymentDir, policyDir, sessionDir, tuiOut]) await mkdirSafe(dir);
   await writeWorkspaceFiles(workspace, scenario.workspaceFiles);
-  const policy = makePolicy(deployment, tools);
   const policyFile = path.join(policyDir, 'lane5.json');
-  await writeFile(policyFile, JSON.stringify(policy, null, 2) + '\n', { mode: 0o600 });
+  let policy;
 
   const report = {
     schema: 'aeltum.tui.evidence.v1', name: scenario.name ?? scenario.id ?? path.basename(scenarioPath),
@@ -282,15 +316,23 @@ async function campaign(opts) {
       sdkHead: await gitValue(sdkRoot, ['rev-parse', 'HEAD']),
       sdkStatus: await gitValue(sdkRoot, ['status', '--short']),
       binary, binarySha256: await sha256File(binary), cols, rows,
+      launchSettingsOnlyAtStart,
       uiRunnerSha256: await sha256File(fileURLToPath(import.meta.url)),
       fixtureHostSha256: await sha256File(fixtureHost), fixtureScenarioSha256: await sha256File(fixturePath),
       campaignSha256: await sha256File(scenarioPath),
     },
-    safety: { providerTarget: '127.0.0.1 ephemeral port', proxyVariablesCleared: true, credentialsCleared: true, externalClipboardWritesRedirected: true, toolAllowlist: tools, workspaceRoot: workspace, outboundFixtureRequests: 0 },
+    safety: { providerTarget: '127.0.0.1 ephemeral port', proxyVariablesCleared: true, credentialsCleared: true, externalClipboardWritesRedirected: true, toolAllowlist: tools, providerModelsCatalogReadOptIn: catalogOptIn, workspaceRoot: workspace, outboundFixtureRequests: 0 },
   };
+  if (opts['skills-dir']) {
+    const selected = String(opts.skills ?? 'repo-discover').split(',');
+    if (!selected.length || selected.some(name => !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name))) throw new Error('select explicit native skill names');
+    report.source.skillStore = path.resolve(opts['skills-dir']);
+    report.source.skills = await Promise.all(selected.map(async name => {
+      const filename = path.join(report.source.skillStore, name, 'SKILL.md');
+      return { name, path: filename, sha256: await sha256File(filename) };
+    }));
+  }
   await writeFile(path.join(runDir, 'scenario.json'), JSON.stringify(scenario, null, 2) + '\n');
-  await writeFile(path.join(runDir, 'abac-policy.json'), JSON.stringify(policy, null, 2) + '\n', { mode: 0o600 });
-
   let fixtureChild, fixtureStdout = '', fixtureStderr = '', session;
   let initialProfile;
   const pendingObservations = new Map();
@@ -300,9 +342,12 @@ async function campaign(opts) {
   let activeScreenDir = '';
   const argsForTui = (fixtureInfo, activeSessionDir) => [
     '-deployment', deployment, '-deployment-dir', deploymentDir,
-    '-base-url', fixtureInfo.baseUrl, '-model', fixture.modelId || 'aeltum-fixture', '-api-key-env', '',
+    '-base-url', fixtureInfo.baseUrl,
+    ...(launchSettingsOnlyAtStart ? [] : ['-model', fixture.modelId || 'aeltum-fixture']),
+    '-api-key-env', '',
     '-workspace-root', workspace, '-session-dir', activeSessionDir,
     '-tool-allowlist', tools.join(','), '-packages', 'core,work',
+    ...(opts['skills-dir'] ? ['-skills-dir', path.resolve(opts['skills-dir']), '-skills', opts.skills ?? 'repo-discover'] : []),
   ];
   const openSession = async fixtureInfo => {
     sessionNumber++;
@@ -333,14 +378,26 @@ async function campaign(opts) {
     fixtureChild.stderr.on('data', value => { fixtureStderr += value; });
     const fixtureInfo = await waitForFile(readyFile, fixtureChild);
     if (fixtureInfo.bindHost !== '127.0.0.1' || !fixtureInfo.baseUrl.startsWith('http://127.0.0.1:')) throw new Error('fixture host did not report an IPv4 loopback endpoint');
+    if (catalogOptIn) {
+      const expectedFixtureHost = await realpath(path.join(sdkRoot, 'tools/tui-scenarios/provider.mjs'));
+      const endpoint = new URL(fixtureInfo.baseUrl);
+      if (fixtureHost !== expectedFixtureHost || endpoint.protocol !== 'http:' || endpoint.hostname !== '127.0.0.1' || !endpoint.port || endpoint.pathname !== '/v1' || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) {
+        throw new Error('provider catalog scenario authority requires the SDK loopback fixture and its exact ephemeral /v1 endpoint');
+      }
+    }
     report.fixture = { ...fixtureInfo, script: fixturePath, modelId: fixture.modelId ?? 'aeltum-fixture' };
+    report.safety.providerModelsCatalogEndpoint = catalogOptIn ? fixtureInfo.baseUrl : null;
     await writeFile(path.join(runDir, 'fixture-connection.json'), JSON.stringify(report.fixture, null, 2) + '\n');
+
+    policy = makePolicy(deployment, tools, catalogOptIn ? { allowLoopbackProviderCatalogRead: true, deploymentDir } : {});
+    await writeFile(policyFile, JSON.stringify(policy, null, 2) + '\n', { mode: 0o600 });
+    await writeFile(path.join(runDir, 'abac-policy.json'), JSON.stringify(policy, null, 2) + '\n', { mode: 0o600 });
 
     const pin = await runProcess(binary, ['settings', 'pin', '-deployment', deployment, '-deployment-dir', deploymentDir], { cwd: sdkRoot, env, timeoutMs: 15000 });
     if (pin.code !== 0) throw new Error(`could not pin temporary ABAC policy (exit ${pin.code}): ${pin.stderr || pin.stdout}`);
     report.policyDigest = pin.stdout.trim();
     await writeFile(path.join(runDir, 'policy-pin.json'), JSON.stringify({ digest: report.policyDigest, command: [binary, 'settings', 'pin', '-deployment', deployment, '-deployment-dir', deploymentDir], stdout: pin.stdout, stderr: pin.stderr }, null, 2) + '\n');
-    initialProfile = { models: [fixture.modelId ?? 'aeltum-fixture'], base_url: fixtureInfo.baseUrl, packages: ['core', 'work'], session_root: sessionDir };
+    initialProfile = { models: launchSettingsOnlyAtStart ? [] : [fixture.modelId ?? 'aeltum-fixture'], base_url: fixtureInfo.baseUrl, packages: ['core', 'work'], session_root: sessionDir };
     report.initialProfile = initialProfile;
     await writeFile(path.join(deploymentDir, 'settings.json'), JSON.stringify(initialProfile, null, 2) + '\n', { mode: 0o600 });
 
@@ -361,6 +418,13 @@ async function campaign(opts) {
         } else if (step.check) {
           if (!session) throw new Error('check requires an open TUI session');
           const result = await checkTui(session, step.check.options);
+          const ordered = step.check.orderedText ?? [];
+          let previous = -1;
+          for (const text of ordered) {
+            const index = String(result.text ?? '').indexOf(text, previous + 1);
+            if (index < 0) { result.passed = false; result.violations.push(`ordered transcript text missing or misplaced: ${text}`); break; }
+            previous = index;
+          }
           stepResult.result = result;
           if (result.screenshot) stepResult.screenshotFullPath = session.screenshotPath(result.screenshot);
           if (!result.passed) { stepResult.passed = false; report.failures.push({ step: step.check.name ?? stepResult.name, violations: result.violations }); }
@@ -425,7 +489,10 @@ async function campaign(opts) {
           stepResult.result = { closed: true };
         } else if (step.workspaceAssert || step.sessionAssert) {
           const results = [];
-          for (const [relative, expected] of Object.entries((step.sessionAssert ?? step.workspaceAssert).files ?? {})) {
+          const assertion = step.sessionAssert ?? step.workspaceAssert;
+          const files = assertion.files ?? (assertion.path ? { [assertion.path]: assertion } : {});
+          if (!Object.keys(files).length) throw new Error('file assertion must select at least one file');
+          for (const [relative, expected] of Object.entries(files)) {
             const assertionRoot = step.sessionAssert ? sessionDir : workspace;
             const filename = path.resolve(assertionRoot, relative);
             if (!filename.startsWith(assertionRoot + path.sep)) throw new Error(`workspace assertion path escapes fixture root: ${relative}`);
@@ -433,6 +500,7 @@ async function campaign(opts) {
             try { contents = await readFile(filename, 'utf8'); } catch { contents = null; }
             const passed = expected.exists === false ? contents === null : contents !== null &&
               (expected.contains === undefined || contents.includes(expected.contains)) &&
+              (expected.equals === undefined || contents === String(expected.equals)) &&
               (expected.containsAll === undefined || expected.containsAll.every(value => contents.includes(value)));
             results.push({ path: filename, passed, expected, contents });
             if (!passed) { stepResult.passed = false; report.failures.push({ step: stepResult.name, error: `artifact file assertion failed: ${relative}` }); }
@@ -491,16 +559,24 @@ async function campaign(opts) {
     try { report.fixtureState = await fixtureState(report.fixture.origin); }
     catch (error) { report.failures.push({ step: 'fixture-state', error: error instanceof Error ? error.message : String(error) }); }
     report.safety.outboundFixtureRequests = report.fixtureState?.outboundRequests ?? null;
+    if (!catalogOptIn && (report.fixtureState?.catalogRequests ?? 0) !== 0) report.failures.push({ step: 'catalog-authority-safety', error: `default scenario policy reached provider catalog ${report.fixtureState.catalogRequests} time(s)` });
+    for (const skill of report.source.skills ?? []) if (await sha256File(skill.path) !== skill.sha256) report.failures.push({ step: 'source-freshness', error: `bound skill changed during campaign: ${skill.name}` });
     report.workspaceFiles = await listFiles(workspace);
     const sessionFiles = await listFiles(sessionDir);
     const sessionFileInventory = path.join(runDir, 'session-files.json');
     await writeFile(sessionFileInventory, JSON.stringify(sessionFiles, null, 2) + '\n');
     report.sessionFiles = { count: sessionFiles.length, inventory: sessionFileInventory };
     report.receipts = sessionFiles.filter(item => item.path.includes('/receipts/'));
+    const catalogReceiptRoot = path.join(deploymentDir, 'oe-catalog');
+    const catalogReceiptFiles = await listFiles(catalogReceiptRoot);
+    report.catalogReceipts = catalogReceiptFiles.filter(item => item.path.includes('/receipts/'));
+    const catalogReceiptInventory = path.join(runDir, 'catalog-receipts.json');
+    await writeFile(catalogReceiptInventory, JSON.stringify(catalogReceiptFiles, null, 2) + '\n');
     const tuiFiles = await listFiles(tuiOut);
     report.artifacts = [
       { kind: 'policy', path: policyFile }, { kind: 'workspace', path: workspace }, { kind: 'session', path: sessionDir },
       { kind: 'session file inventory', path: sessionFileInventory },
+      { kind: 'OE provider catalog receipts', path: catalogReceiptRoot, files: report.catalogReceipts.length, inventory: catalogReceiptInventory },
       { kind: 'TUI screenshots and cell states', path: tuiOut, screenshots: tuiFiles.filter(item => item.path.endsWith('.png')).length },
       { kind: 'fixture state', path: path.join(runDir, 'fixture-state.json') }, { kind: 'fixture logs', path: path.join(runDir, 'fixture.log') },
     ];

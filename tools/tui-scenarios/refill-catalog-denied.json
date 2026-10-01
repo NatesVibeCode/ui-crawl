@@ -1,0 +1,60 @@
+{
+  "name": "Combined build: provider catalog read denied before loopback request",
+  "fixture": "/Users/nate/Documents/Codex/2026-09-30-priority-lanes/tui-catalog-02/refill-catalog-fixture.json",
+  "terminal": {
+    "cols": 100,
+    "rows": 32
+  },
+  "interactionTimeoutMs": 120,
+  "tools": [
+    "file_read"
+  ],
+  "steps": [
+    {
+      "name": "startup",
+      "check": {
+        "options": {
+          "readyText": ["ÆLTUM"],
+          "requiredText": ["ÆLTUM"],
+          "timeoutMs": 3000
+        }
+      }
+    },
+    {
+      "name": "open local provider model catalog",
+      "action": {
+        "type": "type",
+        "text": "/model"
+      }
+    },
+    {
+      "name": "wait for denied local catalog capability",
+      "waitMs": 250
+    },
+    {
+      "name": "catalog denial identifies missing provider_models permission",
+      "check": {
+        "options": {
+          "requiredText": [
+            "/model [search]",
+            "provider catalog access denied"
+          ],
+          "timeoutMs": 3000,
+          "absentText": ["Atlas Reasoning Preview"]
+        }
+      }
+    },
+    {
+      "name": "denied catalog read makes zero provider fixture requests",
+      "fixtureAssert": {
+        "requestCount": 0,
+        "catalogRequestsExactly": 0,
+        "noViolations": true
+      }
+    },
+    {
+      "name": "close denied catalog control",
+      "close": true
+    }
+  ]
+}

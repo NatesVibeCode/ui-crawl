@@ -1,0 +1,288 @@
+{
+  "name": "Combined build: loopback model catalog, favorite, selection and pricing",
+  "fixture": "/Users/nate/Documents/Codex/2026-09-30-priority-lanes/tui-catalog-02/refill-catalog-fixture.json",
+  "authorizeLoopbackProviderCatalogRead": true,
+  "launchSettingsOnlyAtStart": true,
+  "terminal": {
+    "cols": 120,
+    "rows": 40
+  },
+  "interactionTimeoutMs": 150,
+  "tools": [
+    "file_read"
+  ],
+  "steps": [
+    {
+      "name": "startup opens deployment settings without an OE run",
+      "check": {
+        "options": {
+          "readyText": ["SETTINGS"],
+          "requiredText": ["SETTINGS", "Choose a model, then Ctrl+S to start.", "Models"],
+          "timeoutMs": 3000
+        }
+      }
+    },
+    {
+      "name": "settings-only launch has not requested provider metadata yet",
+      "fixtureAssert": {
+        "requestCount": 0,
+        "catalogRequestsExactly": 0,
+        "noViolations": true
+      }
+    },
+    {
+      "name": "browse the provider model catalog",
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "name": "catalog picker retains identity provenance capacity and pricing",
+      "check": {
+        "options": {
+          "readyText": ["CHOOSE A MODEL"],
+          "requiredText": [
+            "Atlas Reasoning Preview",
+            "fixture-labs/atlas-reasoning-preview-2026.09",
+            "127.0.0.1",
+            "131,072 ctx",
+            "$0.15 in / $0.6 out per 1M tokens",
+            "$0.03 cached in"
+          ],
+          "timeoutMs": 4000
+        }
+      }
+    },
+    {
+      "name": "picker performed its explicit catalog read",
+      "fixtureAssert": {
+        "requestCount": 0,
+        "catalogRequestsExactly": 1,
+        "noViolations": true
+      }
+    },
+    {
+      "name": "inspect a model with unknown catalog metadata",
+      "action": {
+        "type": "press",
+        "key": "ArrowDown"
+      }
+    },
+    {
+      "name": "unknown capacity and pricing stay labeled unknown",
+      "check": {
+        "options": {
+          "requiredText": [
+            "Opaque Chat Model",
+            "fixture-labs/opaque-chat-model-2026.09",
+            "unknown ctx",
+            "unknown in / unknown out per 1M tokens"
+          ],
+          "timeoutMs": 3000
+        }
+      }
+    },
+    {
+      "name": "return to the catalog model with measured metadata",
+      "action": {
+        "type": "press",
+        "key": "ArrowUp"
+      }
+    },
+    {
+      "name": "favorite the priced model",
+      "action": {
+        "type": "press",
+        "key": "Ctrl+F"
+      }
+    },
+    {
+      "name": "favorite is visible before route selection",
+      "check": {
+        "options": {
+          "requiredText": ["★ Atlas Reasoning Preview", "fixture-labs/atlas-reasoning-preview-2026.09"],
+          "timeoutMs": 3000
+        }
+      }
+    },
+    {
+      "name": "close settings after persisting the favorite",
+      "close": true
+    },
+    {
+      "name": "reopen settings with the saved favorite",
+      "reopen": true
+    },
+    {
+      "name": "reopened first-run settings are ready for favorite selection",
+      "check": {
+        "options": {
+          "requiredText": ["SETTINGS", "Choose a model, then Ctrl+S to start.", "Models"],
+          "timeoutMs": 3000
+        }
+      }
+    },
+    {
+      "name": "open the saved favorite without another catalog read",
+      "action": {
+        "type": "press",
+        "key": "Ctrl+F"
+      }
+    },
+    {
+      "name": "saved favorite retains full ID and provider route",
+      "check": {
+        "options": {
+          "readyText": ["CHOOSE A MODEL"],
+          "requiredText": [
+            "★ Atlas Reasoning Preview",
+            "fixture-labs/atlas-reasoning-preview-2026.09",
+            "127.0.0.1"
+          ],
+          "timeoutMs": 3000
+        }
+      }
+    },
+    {
+      "name": "select the saved favorite for launch",
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "name": "wait for the deployment model save to settle",
+      "waitMs": 300
+    },
+    {
+      "name": "deployment stores the selected full model ID",
+      "deploymentAssert": {
+        "equals": {
+          "models": ["fixture-labs/atlas-reasoning-preview-2026.09"]
+        }
+      }
+    },
+    {
+      "name": "start AOA with the persisted catalog model",
+      "action": {
+        "type": "press",
+        "key": "Ctrl+S"
+      }
+    },
+    {
+      "name": "new run footer uses selected full ID and catalog capacity",
+      "check": {
+        "options": {
+          "readyText": ["ÆLTUM", "context — / 131,072"],
+          "requiredText": ["fixture-labs/atlas-reasoning-preview-2026.09", "context — / 131,072"],
+          "timeoutMs": 5000
+        }
+      }
+    },
+    {
+      "name": "new run uses the two local metadata reads and no chat inference",
+      "fixtureAssert": {
+        "requestCount": 0,
+        "catalogRequestsExactly": 2,
+        "noViolations": true
+      }
+    },
+    {
+      "name": "ordinary words containing model do not open the catalog",
+      "action": {
+        "type": "type",
+        "text": "model is an ordinary word here"
+      }
+    },
+    {
+      "name": "ordinary sentence remains a draft",
+      "check": {
+        "options": {
+          "requiredText": ["model is an ordinary word here"],
+          "absentText": ["CHOOSE A MODEL", "Atlas Reasoning Preview"]
+        }
+      }
+    },
+    {
+      "name": "ordinary words issue no catalog request",
+      "fixtureAssert": {
+        "requestCount": 0,
+        "catalogRequestsExactly": 2,
+        "noViolations": true
+      }
+    },
+    {
+      "name": "clear ordinary draft",
+      "action": {
+        "type": "press",
+        "key": "Ctrl+U"
+      }
+    },
+    {
+      "name": "close the first console process",
+      "close": true
+    },
+    {
+      "name": "reopen the same deployment and session directory",
+      "reopen": true
+    },
+    {
+      "name": "reopen restores the chosen full ID and honest context footer",
+      "check": {
+        "options": {
+          "readyText": ["ÆLTUM", "context — / 131,072"],
+          "requiredText": ["fixture-labs/atlas-reasoning-preview-2026.09", "context — / 131,072"],
+          "timeoutMs": 5000
+        }
+      }
+    },
+    {
+      "name": "reopened settings show the saved favorite",
+      "action": {
+        "type": "type",
+        "text": "/settings"
+      }
+    },
+    {
+      "name": "open saved deployment settings",
+      "action": {
+        "type": "press",
+        "key": "Enter"
+      }
+    },
+    {
+      "name": "show saved model favorite",
+      "action": {
+        "type": "press",
+        "key": "Ctrl+F"
+      }
+    },
+    {
+      "name": "saved favorite retains exact model ID and provider route",
+      "check": {
+        "options": {
+          "readyText": ["CHOOSE A MODEL"],
+          "requiredText": [
+            "★ Atlas Reasoning Preview",
+            "fixture-labs/atlas-reasoning-preview-2026.09",
+            "127.0.0.1"
+          ],
+          "timeoutMs": 3000
+        }
+      }
+    },
+    {
+      "name": "catalog receipts show the allowed metadata read and no inference",
+      "fixtureAssert": {
+        "requestCount": 0,
+        "catalogRequestsExactly": 3,
+        "noViolations": true
+      }
+    },
+    {
+      "name": "close catalog campaign",
+      "close": true
+    }
+  ]
+}
