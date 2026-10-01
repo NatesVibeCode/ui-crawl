@@ -47,7 +47,12 @@ export type FindingType =
   | 'viewport-scale-imbalance' // hero heading consumes >35% of above-the-fold viewport height (taste)
   | 'unanchored-divider-bleed' // horizontal divider line width exceeds page content grid boundaries (taste)
   | 'adjacent-wordmark-echo' // site wordmark text immediately repeated in adjacent hero subhead (taste)
-  | 'above-the-fold-vacancy'; // excessive empty vertical space between header and hero content (taste)
+  | 'above-the-fold-vacancy' // excessive empty vertical space between header and hero content (taste)
+  | 'svg-geometry-outside-viewbox' // rendered SVG geometry extends past the SVG viewport (clipped content)
+  | 'svg-viewbox-aspect-mismatch' // SVG viewBox orientation disagrees with content orientation (transposed box)
+  | 'svg-text-overlap' // SVG text collides with another label or sits off-center on a shape
+  | 'svg-text-scaled' // SVG text renders at an absurd effective size (viewBox-only sizing blowup)
+  | 'svg-degenerate-geometry'; // filled SVG shape renders zero area (collapsed data mark)
 
 export interface SourceLocation {
   file?: string;
@@ -199,6 +204,20 @@ export interface Evidence {
     box?: Box;
     otherBox?: Box;
     overflowPx?: number;
+  };
+  svg?: {
+    svgSelector?: string;
+    otherSelector?: string;
+    overlapFrac?: number;
+    box?: Box;
+    otherBox?: Box;
+    overflowPx?: number;
+    viewBox?: { x: number; y: number; w: number; h: number };
+    contentAspect?: number;
+    viewBoxAspect?: number;
+    effectiveFontPx?: number;
+    specifiedFontPx?: number;
+    textSample?: string;
   };
   typography?: {
     ratio?: number;

@@ -220,6 +220,53 @@ const RULES: Record<FindingType, BaseRule> = {
         : 'Excessive above-the-fold vacancy before primary content';
     },
   },
+  'svg-geometry-outside-viewbox': {
+    bucket: 'defect',
+    severity: 'high',
+    tags: ['usability'],
+    title: (r) => {
+      const s = r.evidence.svg;
+      return s?.overflowPx
+        ? `SVG content overflows its viewport by ${Math.round(s.overflowPx)}px (clipped rendering): "${r.evidence.selector ?? 'shape'}" in "${s.svgSelector ?? 'svg'}"`
+        : `SVG content renders outside its viewport: "${r.evidence.selector ?? 'shape'}"`;
+    },
+  },
+  'svg-viewbox-aspect-mismatch': {
+    bucket: 'defect',
+    severity: 'high',
+    tags: ['usability'],
+    title: (r) => {
+      const s = r.evidence.svg;
+      return s?.contentAspect && s?.viewBoxAspect
+        ? `SVG viewBox aspect (${s.viewBoxAspect.toFixed(2)}) disagrees with content aspect (${s.contentAspect.toFixed(2)}) — transposed box: "${s.svgSelector ?? 'svg'}"`
+        : `SVG viewBox orientation disagrees with content orientation: "${r.evidence.selector ?? 'svg'}"`;
+    },
+  },
+  'svg-text-overlap': {
+    bucket: 'defect',
+    severity: 'high',
+    tags: ['usability'],
+    title: (r) =>
+      `SVG text collides: "${r.evidence.selector ?? 'text'}" and "${r.evidence.svg?.otherSelector ?? 'element'}"`,
+  },
+  'svg-text-scaled': {
+    bucket: 'defect',
+    severity: 'medium',
+    tags: ['usability'],
+    title: (r) => {
+      const s = r.evidence.svg;
+      return s?.effectiveFontPx
+        ? `SVG text renders at ~${Math.round(s.effectiveFontPx)}px after SVG scaling: "${r.evidence.selector ?? 'text'}"`
+        : `SVG text is enlarged by SVG scaling: "${r.evidence.selector ?? 'text'}"`;
+    },
+  },
+  'svg-degenerate-geometry': {
+    bucket: 'defect',
+    severity: 'medium',
+    tags: ['usability'],
+    title: (r) =>
+      `Filled SVG shape renders zero area (collapsed data mark): "${r.evidence.selector ?? 'shape'}"`,
+  },
 };
 
 function pct(z?: number): string {

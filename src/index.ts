@@ -25,6 +25,7 @@ const EMPTY_COLOR_AUDIT: ColorAuditResult = {
 import { auditPageSpacing, edgeDistance } from './spacing.js';
 import { auditPageAffordance } from './affordance.js';
 import { auditPageLayout, boxIntersection } from './layout.js';
+import { auditPageSvg } from './svg.js';
 import { auditPageHitTest } from './hitTest.js';
 import { resolveSourceForSelector } from './source.js';
 import { markControls } from './snapshot.js';
@@ -84,6 +85,7 @@ export { auditPageColors, contrastRatio, relativeLuminance, parseColor, suggestA
 export { auditPageSpacing, edgeDistance } from './spacing.js';
 export { auditPageAffordance } from './affordance.js';
 export { auditPageLayout, boxIntersection } from './layout.js';
+export { auditPageSvg, classifySvgSnapshot, type SvgSnapshot, type SvgShapeSnapshot, type SvgIssue, type SvgIssueKind } from './svg.js';
 export { triageRaw } from './triage.js';
 export { toRouteTemplate } from './routeTemplate.js';
 export { planVisits, planSeedList } from './discover.js';
@@ -583,6 +585,9 @@ async function executeVisit(
       const layoutFindings = await runDetector(
         route, 'layout', detectorFailures, () => auditPageLayout(page, route, { viewport: viewportEvidence }), []);
       rawFindings.push(...layoutFindings);
+      const svgFindings = await runDetector(
+        route, 'svg', detectorFailures, () => auditPageSvg(page, route, { skipContrast: cfg.skipContrast }), []);
+      rawFindings.push(...svgFindings);
       const tabFindings = await runDetector(route, 'tab-panels', detectorFailures, () => auditTabPanels(page, route), []);
       rawFindings.push(...tabFindings);
     }
